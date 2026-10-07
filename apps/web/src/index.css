@@ -1,0 +1,86 @@
+@import 'tailwindcss';
+
+/* Tokens de marca tomados del CRM de VentaPlay (crm.ventaplay.com) */
+@theme {
+  --font-sans: 'Lato', ui-sans-serif, system-ui, sans-serif;
+
+  --color-violeta: #450693; /* violeta-100 · color primario */
+  --color-violeta-80: #5b2bbf;
+  --color-violeta-60: #8d5ce8;
+  --color-violeta-10: #ece4fa;
+  --color-violeta-5: #f6f2fd;
+  --color-magenta: #8c00ff;
+  --color-turquesa: #08c8a7;
+  --color-turquesa-140: #039c7f;
+  --color-turquesa-10: #ddf6f0;
+  --color-whatsapp: #16a34a;
+  --color-ink: #020817; /* text-primary */
+  --color-ink-soft: #64748b; /* text-secondary */
+  --color-line: #e5e7eb;
+  --color-canvas: #f7f5fb;
+  --color-danger: #dc2626;
+  --color-warning: #d4a400;
+
+  --radius-card: 1rem;
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.04), 0 4px 16px rgb(69 6 147 / 0.06);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+  body {
+    @apply bg-canvas font-sans text-ink antialiased;
+  }
+  ::selection {
+    background: var(--color-violeta-10);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-violeta-60);
+    outline-offset: 2px;
+  }
+}
+
+/* componentes reutilizables (Tailwind v4: @utility) */
+@utility card {
+  @apply rounded-[var(--radius-card)] border border-line bg-white shadow-[var(--shadow-card)];
+}
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition
+    disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply btn bg-violeta text-white hover:bg-violeta-80 active:scale-[0.98];
+}
+@utility btn-secondary {
+  @apply btn border border-line bg-white text-ink hover:bg-violeta-5;
+}
+@utility btn-danger {
+  @apply btn border border-red-200 bg-white text-danger hover:bg-red-50;
+}
+@utility btn-danger-solid {
+  @apply btn bg-danger text-white hover:bg-red-700;
+}
+@utility input {
+  @apply w-full rounded-xl border border-line bg-white px-3.5 py-2.5 text-sm outline-none transition
+    placeholder:text-ink-soft/70 focus:border-violeta-60 focus:ring-4 focus:ring-violeta-10;
+}
+@utility label {
+  @apply mb-1.5 block text-sm font-bold text-ink;
+}
+
+@keyframes pop-in {
+  from {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.pop-in {
+  animation: pop-in 0.35s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
