@@ -131,6 +131,8 @@ export interface StatsSnapshot {
   completionInferred: boolean;
   /** syncType → completo */
   syncTypes: Record<string, boolean>;
+  /** syncType → último avance informado (no existe en snapshots viejos) */
+  syncProgress?: Record<string, number>;
   /** detalle por contacto (no existe en snapshots viejos) */
   contactInfo?: Record<string, ContactInfo>;
   /** true si contactInfo se guardó desde el primer lote (sabemos quién está en la agenda) */
@@ -138,6 +140,13 @@ export interface StatsSnapshot {
 }
 
 const TOP_N = 10;
+
+/** tipos de History Sync (proto HistorySync.HistorySyncType) */
+const SYNC_BOOTSTRAP = '0';
+const SYNC_FULL = '2';
+const SYNC_RECENT = '3';
+/** tipos que llegan en muchos lotes y avisan su avance */
+const LONG_SYNC_TYPES = new Set([SYNC_FULL, SYNC_RECENT]);
 /** ids recientes que recordamos para deduplicar (acota la memoria en cuentas enormes) */
 const DEDUPE_LIMIT = 200_000;
 
@@ -202,6 +211,7 @@ export class StatsAggregator {
   private state: SyncState = 'waiting';
   private completionInferred = false;
   private syncTypes = new Map<string, boolean>();
+  private syncProgress = new Map<string, number>();
 
   constructor(snapshot?: StatsSnapshot | null) {
     if (snapshot?.v === 1) this.restore(snapshot);
@@ -216,18 +226,34 @@ export class StatsAggregator {
     this.addMessages(batch.messages);
     this.batches += 1;
     this.lastBatchAt = now;
-    if (typeof batch.progress === 'number')
-      this.progress = Math.max(0, Math.min(100, batch.progress));
-    let reopen = this.state !== 'complete';
+    const p =
+      typeof batch.progress === 'number' ? Math.max(0, Math.min(100, batch.progress)) : null;
     if (batch.syncType !== null && batch.syncType !== undefined) {
       const k = String(batch.syncType);
-      if (!this.syncTypes.has(k)) this.syncTypes.set(k, false);
-      // llegó un lote de un tipo que WhatsApp aún no dio por terminado: seguimos sincronizando
-      if (this.syncTypes.get(k) !== true) reopen = true;
-    } else if (this.completionInferred) {
-      reopen = true;
+      if (p !== null) this.syncProgress.set(k, p);
+      // un tipo termina cuando WhatsApp lo confirma o cuando su avance llega a 100;
+      // los tipos de un solo lote (contactos, estados) terminan al llegar
+      const done =
+        this.syncTypes.get(k) === true || p === 100 || (p === null && !LONG_SYNC_TYPES.has(k));
+      this.syncTypes.set(k, done);
+    } else if (p !== null) {
+      this.progress = p;
     }
-    if (reopen) {
+    this.refreshState();
+  }
+
+  /** estado y avance global a partir de lo que sabemos de cada tipo de sync */
+  private refreshState(): void {
+    const full = this.syncProgress.get(SYNC_FULL);
+    const recent = this.syncProgress.get(SYNC_RECENT);
+    const boot = this.syncProgress.get(SYNC_BOOTSTRAP);
+    this.progress = full ?? recent ?? boot ?? this.progress;
+    const types = [...this.syncTypes.values()];
+    if (this.batches > 0 && types.length > 0 && types.every(Boolean)) {
+      this.state = 'complete';
+      this.completionInferred = false;
+      this.progress = 100;
+    } else if (this.batches > 0) {
       this.state = 'running';
       this.completionInferred = false;
     }
@@ -237,20 +263,28 @@ export class StatsAggregator {
   markSyncStatus(syncType: number, status: 'complete' | 'paused'): void {
     if (status !== 'complete') return;
     this.syncTypes.set(String(syncType), true);
-    if (this.batches > 0 && [...this.syncTypes.values()].every(Boolean)) {
-      this.state = 'complete';
-      this.completionInferred = false;
-      this.progress = 100;
-    }
+    if (this.batches > 0) this.refreshState();
   }
 
-  /** si no llegan lotes por un rato damos el sync por terminado (inferido) */
-  inferCompletionIfIdle(idleMs: number, now = Date.now()): boolean {
-    if (this.state !== 'running' || this.lastBatchAt === null) return false;
-    if (now - this.lastBatchAt < idleMs) return false;
-    this.state = 'complete';
-    this.completionInferred = true;
-    return true;
+  /**
+   * WhatsApp manda el historial por partes y el teléfono se detiene cuando la app
+   * queda en segundo plano. Sin lotes por `pauseMs` → 'paused' (no terminado).
+   * Si el historial completo (FULL) nunca empezó, tras `giveUpMs` lo damos por
+   * terminado (inferido): ese teléfono no va a mandar más.
+   */
+  checkIdle(opts: { pauseMs: number; giveUpMs: number }, now = Date.now()): boolean {
+    if (this.lastBatchAt === null) return false;
+    const idle = now - this.lastBatchAt;
+    if (this.state === 'running' && idle >= opts.pauseMs) {
+      this.state = 'paused';
+      return true;
+    }
+    if (this.state === 'paused' && !this.syncTypes.has(SYNC_FULL) && idle >= opts.giveUpMs) {
+      this.state = 'complete';
+      this.completionInferred = true;
+      return true;
+    }
+    return false;
   }
 
   /** sesión re-conectada sin historial nuevo (ya se había sincronizado antes) */
@@ -404,6 +438,8 @@ export class StatsAggregator {
       oldestMessageAt: this.oldest,
       newestMessageAt: this.newest,
       lidMappings: this.lidToPn.size,
+      recentProgress: this.syncProgress.get(SYNC_RECENT) ?? null,
+      fullProgress: this.syncProgress.get(SYNC_FULL) ?? null,
       topChats,
     };
   }
@@ -511,6 +547,7 @@ export class StatsAggregator {
       state: this.state,
       completionInferred: this.completionInferred,
       syncTypes: Object.fromEntries(this.syncTypes),
+      syncProgress: Object.fromEntries(this.syncProgress),
       contactInfo: Object.fromEntries(this.contactInfo),
       contactInfoComplete: this.hasContactInfo,
     };
@@ -531,6 +568,16 @@ export class StatsAggregator {
     this.state = s.state;
     this.completionInferred = s.completionInferred;
     this.syncTypes = new Map(Object.entries(s.syncTypes));
+    this.syncProgress = new Map(Object.entries(s.syncProgress ?? {}));
+    if (this.syncProgress.size === 0) {
+      // snapshot viejo: reconstruimos el avance por tipo con lo que sí guardaba
+      if (this.syncTypes.get(SYNC_RECENT)) this.syncProgress.set(SYNC_RECENT, 100);
+      if (this.syncTypes.has(SYNC_FULL) && this.progress !== null)
+        this.syncProgress.set(SYNC_FULL, this.syncTypes.get(SYNC_FULL) ? 100 : this.progress);
+    }
+    // snapshots viejos daban por terminado un sync que en realidad quedó a medias
+    if (this.state === 'complete' && this.completionInferred && (this.progress ?? 100) < 100)
+      this.state = 'paused';
     this.contactInfo = new Map(Object.entries(s.contactInfo ?? {}));
     this.hasContactInfo = s.contactInfoComplete === true;
   }

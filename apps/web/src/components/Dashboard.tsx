@@ -8,6 +8,7 @@ import {
   FileSpreadsheet,
   MessagesSquare,
   MessageCircle,
+  PauseCircle,
   Users,
   Unplug,
   Workflow,
@@ -221,49 +222,87 @@ function ExcelContactsExporter({
 }
 
 function SyncBanner({ stats }: { stats: SyncStats }) {
+  const now = useNow(15_000);
+  const phases = <SyncPhases stats={stats} />;
+
   if (stats.state === 'complete') {
     return (
       <div className="flex items-center gap-3 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
         <CircleCheck className="size-5 shrink-0" />
         <span>
-          <b>Historial copiado.</b> {fmtNumber(stats.batches)} lotes recibidos desde el teléfono
+          <b>Historial completo.</b> {fmtNumber(stats.batches)} lotes recibidos desde el teléfono
           {stats.completionInferred &&
-            ' (WhatsApp dejó de enviar; puede haber más si el teléfono estuvo offline)'}
+            ' (el teléfono no envió el historial antiguo; puede llegar más si lo abres)'}
           .
         </span>
       </div>
     );
   }
+
   const pct = stats.progress ?? null;
+  const paused = stats.state === 'paused';
   return (
-    <div className="card p-5">
+    <div className={`card p-5 ${paused ? 'border-amber-200 bg-amber-50/60' : ''}`}>
       <div className="flex items-center gap-3">
-        <Spinner className="size-5 text-violeta" />
+        {paused ? (
+          <PauseCircle className="size-5 shrink-0 text-amber-600" />
+        ) : (
+          <Spinner className="size-5 text-violeta" />
+        )}
         <div className="flex-1">
           <p className="font-black">
             {stats.state === 'waiting'
               ? 'Esperando el historial del teléfono…'
-              : 'Copiando historial…'}
+              : paused
+                ? 'Historial en pausa'
+                : 'Copiando historial…'}
           </p>
           <p className="text-sm text-ink-soft">
             {stats.state === 'waiting'
               ? 'WhatsApp suele empezar a enviarlo en unos segundos. Deja el teléfono encendido y con internet.'
-              : `Lote ${fmtNumber(stats.batches)} · los números de abajo se actualizan en vivo.`}
+              : paused
+                ? `El teléfono dejó de enviar ${fmtAgo(stats.lastBatchAt, now)}. Abre WhatsApp en el teléfono y déjalo en pantalla, con Wi-Fi y cargando: así sigue. Termina recién al llegar al 100%.`
+                : `Lote ${fmtNumber(stats.batches)} · los números de abajo se actualizan en vivo. El teléfono manda por partes y puede pausar.`}
           </p>
+          {phases}
         </div>
         {pct !== null && (
-          <span className="text-2xl font-black tabular-nums text-violeta">{pct}%</span>
+          <span
+            className={`text-2xl font-black tabular-nums ${paused ? 'text-amber-700' : 'text-violeta'}`}
+          >
+            {pct}%
+          </span>
         )}
       </div>
-      <div className="mt-4 h-2 overflow-hidden rounded-full bg-violeta-5">
+      <div
+        className={`mt-4 h-2 overflow-hidden rounded-full ${paused ? 'bg-amber-100' : 'bg-violeta-5'}`}
+      >
         <div
-          className={`h-full rounded-full bg-gradient-to-r from-turquesa to-violeta-60 transition-[width] duration-500 ${
-            pct === null ? 'w-1/3 animate-pulse' : ''
-          }`}
+          className={`h-full rounded-full transition-[width] duration-500 ${
+            paused ? 'bg-amber-400' : 'bg-gradient-to-r from-turquesa to-violeta-60'
+          } ${pct === null ? 'w-1/3 animate-pulse' : ''}`}
           style={pct === null ? undefined : { width: `${Math.max(4, pct)}%` }}
         />
       </div>
     </div>
+  );
+}
+
+/** "Recientes 100% · Historial completo 79%" */
+function SyncPhases({ stats }: { stats: SyncStats }) {
+  const items = [
+    { label: 'Recientes', value: stats.recentProgress },
+    { label: 'Historial completo', value: stats.fullProgress },
+  ].filter((i) => i.value !== null && i.value !== undefined);
+  if (items.length === 0) return null;
+  return (
+    <p className="mt-1 flex flex-wrap gap-x-3 text-xs font-bold text-ink-soft">
+      {items.map((i) => (
+        <span key={i.label}>
+          {i.label} {i.value === 100 ? '✓' : `${i.value}%`}
+        </span>
+      ))}
+    </p>
   );
 }
 

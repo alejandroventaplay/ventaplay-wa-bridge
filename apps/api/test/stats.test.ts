@@ -108,11 +108,60 @@ describe('StatsAggregator', () => {
       completionInferred: false,
     });
 
+    // sin historial completo a la vista: pausa y, si sigue sin llegar nada, se da por terminado
     const b = new StatsAggregator();
     b.addHistoryBatch({ chats: [], contacts: [], messages: [] }, 1000);
-    expect(b.inferCompletionIfIdle(90_000, 50_000)).toBe(false);
-    expect(b.inferCompletionIfIdle(90_000, 100_000)).toBe(true);
+    const idle = { pauseMs: 120_000, giveUpMs: 900_000 };
+    expect(b.checkIdle(idle, 50_000)).toBe(false);
+    expect(b.checkIdle(idle, 200_000)).toBe(true);
+    expect(b.summary().state).toBe('paused');
+    expect(b.checkIdle(idle, 1_000_000)).toBe(true);
     expect(b.summary()).toMatchObject({ state: 'complete', completionInferred: true });
+  });
+
+  it('como en un teléfono real: RECENT llega rápido, FULL por partes con pausas largas', () => {
+    const a = new StatsAggregator();
+    const idle = { pauseMs: 120_000, giveUpMs: 900_000 };
+    const lote = (syncType: number, progress: number | null, t: number) =>
+      a.addHistoryBatch({ chats: [], contacts: [], messages: [], syncType, progress }, t);
+    lote(5, null, 0);
+    lote(0, 100, 1_000);
+    lote(1, null, 2_000);
+    lote(4, null, 3_000);
+    expect(a.summary().state).toBe('complete'); // por ahora no hay más que esperar
+    lote(3, 3, 400_000);
+    expect(a.summary()).toMatchObject({ state: 'running', progress: 3, recentProgress: 3 });
+    lote(3, 100, 410_000);
+    lote(2, 2, 420_000);
+    lote(2, 79, 430_000);
+    expect(a.summary()).toMatchObject({
+      state: 'running',
+      progress: 79,
+      recentProgress: 100,
+      fullProgress: 79,
+    });
+    // 12 minutos sin lotes: en pausa, nunca "completo" mientras FULL no llegue a 100
+    expect(a.checkIdle(idle, 430_000 + 720_000)).toBe(true);
+    expect(a.summary().state).toBe('paused');
+    expect(a.checkIdle(idle, 430_000 + 5_000_000)).toBe(false);
+    expect(a.summary().state).toBe('paused');
+    lote(2, 92, 6_000_000);
+    expect(a.summary().state).toBe('running');
+    lote(2, 100, 6_010_000);
+    expect(a.summary()).toMatchObject({
+      state: 'complete',
+      progress: 100,
+      completionInferred: false,
+    });
+  });
+
+  it('un snapshot viejo que dio por completo un sync a medias queda en pausa', () => {
+    const a = new StatsAggregator();
+    a.addHistoryBatch({ chats: [], contacts: [], messages: [], syncType: 2, progress: 79 }, 1);
+    const snap = { ...a.snapshot(), state: 'complete' as const, completionInferred: true };
+    delete (snap as { syncProgress?: unknown }).syncProgress;
+    snap.progress = 79;
+    expect(new StatsAggregator(snap).summary().state).toBe('paused');
   });
 
   it('sobrevive a un snapshot/restore', () => {

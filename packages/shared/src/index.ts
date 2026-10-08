@@ -63,7 +63,12 @@ export interface WaProfile {
   platform?: string | null;
 }
 
-export type SyncState = 'waiting' | 'running' | 'complete';
+/**
+ * waiting: aún no llega nada · running: llegando lotes · paused: el teléfono dejó de
+ * enviar antes de terminar (suele seguir cuando se abre WhatsApp en el teléfono) ·
+ * complete: terminó.
+ */
+export type SyncState = 'waiting' | 'running' | 'paused' | 'complete';
 
 export interface TopChat {
   jid: string;
@@ -79,6 +84,10 @@ export interface SyncStats {
   state: SyncState;
   /** 0–100 según WhatsApp; null si no lo informa */
   progress: number | null;
+  /** avance de los mensajes recientes (RECENT), 0–100; null si no empezó */
+  recentProgress?: number | null;
+  /** avance del historial completo (FULL), 0–100; null si no empezó */
+  fullProgress?: number | null;
   /** lotes de History Sync recibidos */
   batches: number;
   lastBatchAt: number | null;

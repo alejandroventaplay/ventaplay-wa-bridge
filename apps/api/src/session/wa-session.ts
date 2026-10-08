@@ -12,7 +12,10 @@ import { type Directory, normalizeJid, phoneOf, StatsAggregator } from './stats.
 const FIRST_QR_TTL_MS = 60_000;
 const NEXT_QR_TTL_MS = 20_000;
 /** sin lotes de historial por este tiempo → damos el sync por terminado */
-const SYNC_IDLE_MS = 90_000;
+/** sin lotes por este tiempo, el sync se muestra "en pausa" */
+const SYNC_PAUSE_MS = 120_000;
+/** si el historial completo nunca empezó, tras este tiempo lo damos por terminado */
+const SYNC_GIVE_UP_MS = 15 * 60_000;
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 /** intentos fallidos antes de vincular (sin QR) antes de rendirnos */
 const MAX_UNLINKED_ATTEMPTS = 5;
@@ -588,10 +591,16 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   private armIdleTimer(): void {
     this.clearIdleTimer();
     this.idleTimer = setInterval(() => {
-      if (this.stats.inferCompletionIfIdle(SYNC_IDLE_MS)) {
-        this.log.info('sin lotes nuevos: historial dado por completo');
+      if (this.stats.checkIdle({ pauseMs: SYNC_PAUSE_MS, giveUpMs: SYNC_GIVE_UP_MS })) {
+        const { state, progress } = this.stats.summary();
+        this.log.info(
+          { state, progress },
+          state === 'paused'
+            ? 'historial en pausa: el teléfono dejó de enviar'
+            : 'historial terminado',
+        );
         this.touch(true);
-        this.clearIdleTimer();
+        if (state === 'complete') this.clearIdleTimer();
       }
     }, 15_000);
     this.idleTimer.unref?.();
