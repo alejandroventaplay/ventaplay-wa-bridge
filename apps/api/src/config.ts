@@ -51,6 +51,9 @@ const EnvSchema = z.object({
   MAX_SESSIONS: z.coerce.number().int().positive().default(20),
   /** borra las credenciales locales si WhatsApp desvincula el dispositivo */
   WIPE_ON_LOGOUT: bool.default(true),
+
+  /** solo desarrollo local: acciones de una lista cerrada pedidas por archivo (ver src/dev) */
+  DEV_RUNNER: bool.default(false),
 });
 
 export type Config = z.infer<typeof EnvSchema> & {
@@ -82,6 +85,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     }
     if (c.WA_DRIVER === 'simulator')
       throw new Error('WA_DRIVER=simulator no se permite en producción');
+    if (c.DEV_RUNNER) throw new Error('DEV_RUNNER no se permite en producción');
   }
 
   return {

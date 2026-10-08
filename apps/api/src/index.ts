@@ -1,4 +1,5 @@
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import pino from 'pino';
 import { loadConfig } from './config.js';
 import { Cipher, resolveDevKey } from './crypto.js';
@@ -95,6 +96,16 @@ async function main(): Promise<void> {
     { port: config.PORT, driver: config.WA_DRIVER, storage: store.kind, auth: auth.mode },
     'VentaPlay WA Bridge listo (solo lectura)',
   );
+
+  if (config.DEV_RUNNER && config.NODE_ENV === 'development') {
+    const { startLocalRunner } = await import('./dev/local-runner.js');
+    const here = dirname(fileURLToPath(import.meta.url));
+    startLocalRunner({
+      root: resolve(here, '../../..'),
+      logger,
+      restartTouchFile: fileURLToPath(import.meta.url),
+    });
+  }
 
   let closing = false;
   const shutdown = async (signal: string) => {
