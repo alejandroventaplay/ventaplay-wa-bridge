@@ -1,15 +1,20 @@
+import { useState } from 'react';
 import {
   BadgeCheck,
   CalendarRange,
   CircleCheck,
   Contact,
+  Download,
+  FileSpreadsheet,
   MessagesSquare,
   MessageCircle,
   Users,
   Unplug,
+  Workflow,
 } from 'lucide-react';
 import type { SessionSummary, SyncStats, TopChat } from '@wa-bridge/shared';
 import { useNow } from '../hooks/streams';
+import { api } from '../lib/api';
 import { fmtAgo, fmtDate, fmtNumber, fmtPhone, fmtSpan } from '../lib/format';
 import { Avatar, Spinner } from './ui';
 
@@ -84,7 +89,98 @@ export function Dashboard({ session, onDisconnect }: Props) {
         <TopChats chats={stats.topChats} />
         <HistoryRange stats={stats} />
       </div>
+
+      <Exporters session={session} />
     </div>
+  );
+}
+
+/** Formas de sacar lo que llegó del teléfono. Cada exportador es una fila. */
+function Exporters({ session }: { session: SessionSummary }) {
+  const { stats } = session;
+  const hasData = stats.contacts + stats.chats > 0;
+  return (
+    <section className="card p-6">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-lg font-black">
+          <Download className="size-5 text-violeta" /> Exportar
+        </h3>
+        <span className="text-xs font-bold text-ink-soft">
+          Nombres, números y fechas · nunca el contenido de los mensajes
+        </span>
+      </div>
+      <ul className="mt-5 divide-y divide-line">
+        <ExcelContactsExporter session={session} disabled={!hasData} />
+        <li className="flex flex-col gap-3 py-4 opacity-60 sm:flex-row sm:items-center">
+          <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-violeta-5 text-violeta">
+            <Workflow className="size-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="font-black">Directo a VentaPlay CRM</p>
+            <p className="text-sm text-ink-soft">
+              Crea los clientes en la organización, sin pasar por un archivo.
+            </p>
+          </div>
+          <span className="self-start rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600 sm:self-center">
+            Próximamente
+          </span>
+        </li>
+      </ul>
+    </section>
+  );
+}
+
+function ExcelContactsExporter({
+  session,
+  disabled,
+}: {
+  session: SessionSummary;
+  disabled: boolean;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const { stats } = session;
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    setDone(null);
+    try {
+      setDone(await api.downloadContactsXlsx(session.id));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <li className="flex flex-col gap-3 py-4 first:pt-0 sm:flex-row sm:items-center">
+      <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-green-50 text-green-700">
+        <FileSpreadsheet className="size-5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="font-black">Excel de contactos</p>
+        <p className="text-sm text-ink-soft">
+          Nombre, teléfono (+56…), nombre en la agenda y en WhatsApp, empresa, cantidad de mensajes
+          y fechas. Trae además una hoja con los grupos.
+        </p>
+        <p className="mt-1 text-xs font-bold text-ink-soft">
+          {fmtNumber(stats.contacts)} contactos · {fmtNumber(stats.individualChats)} chats ·{' '}
+          {fmtNumber(stats.groups)} grupos
+        </p>
+        {done && <p className="mt-1 text-xs font-bold text-green-700">Descargado: {done}</p>}
+        {error && <p className="mt-1 text-xs font-bold text-danger">{error}</p>}
+      </div>
+      <button
+        className="btn-primary self-start sm:self-center"
+        onClick={() => void run()}
+        disabled={disabled || busy}
+      >
+        {busy ? <Spinner className="size-4" /> : <Download className="size-4" />} Descargar Excel
+      </button>
+    </li>
   );
 }
 

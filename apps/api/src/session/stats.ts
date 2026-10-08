@@ -58,6 +58,50 @@ interface ChatAgg {
   isGroup: boolean;
   messages: number;
   lastMessageAt: number | null;
+  /** mensaje más antiguo visto en el chat (no existe en snapshots viejos) */
+  firstMessageAt?: number | null;
+}
+
+/** Lo que sabemos de un contacto, campo por campo (para exportar). */
+export interface ContactInfo {
+  /** nombre con que lo guardaste en la agenda del teléfono */
+  name?: string | null;
+  /** nombre que la persona se puso en WhatsApp */
+  notify?: string | null;
+  /** nombre verificado de WhatsApp Business */
+  verifiedName?: string | null;
+}
+
+/** Una persona para exportar: contacto de la agenda y/o alguien con quien hay chat. */
+export interface DirectoryPerson {
+  /** JID canónico: el número si lo conocemos, si no el LID */
+  jid: string;
+  /** número sin '+', p.ej. 56912345678; null si solo conocemos su LID */
+  phone: string | null;
+  lid: string | null;
+  /** el mejor nombre disponible */
+  displayName: string | null;
+  savedName: string | null;
+  pushName: string | null;
+  businessName: string | null;
+  /** true/false si lo sabemos; null en datos sincronizados antes de guardar este detalle */
+  inAddressBook: boolean | null;
+  messages: number;
+  firstMessageAt: number | null;
+  lastMessageAt: number | null;
+}
+
+export interface DirectoryGroup {
+  jid: string;
+  name: string | null;
+  messages: number;
+  firstMessageAt: number | null;
+  lastMessageAt: number | null;
+}
+
+export interface Directory {
+  people: DirectoryPerson[];
+  groups: DirectoryGroup[];
 }
 
 /** Estado serializable del agregador, para continuar tras un reinicio. */
@@ -76,6 +120,10 @@ export interface StatsSnapshot {
   completionInferred: boolean;
   /** syncType → completo */
   syncTypes: Record<string, boolean>;
+  /** detalle por contacto (no existe en snapshots viejos) */
+  contactInfo?: Record<string, ContactInfo>;
+  /** true si contactInfo se guardó desde el primer lote (sabemos quién está en la agenda) */
+  contactInfoComplete?: boolean;
 }
 
 const TOP_N = 10;
@@ -120,6 +168,9 @@ const IGNORED_MESSAGE_TYPES = new Set(['protocolMessage', 'senderKeyDistribution
 export class StatsAggregator {
   private chats = new Map<string, ChatAgg>();
   private contacts = new Map<string, string | null>();
+  private contactInfo = new Map<string, ContactInfo>();
+  /** false si el snapshot restaurado no traía detalle por contacto */
+  private hasContactInfo = true;
   private lidToPn = new Map<string, string>();
   private seenMessages = new Set<string>();
   private messages = 0;
@@ -209,11 +260,16 @@ export class StatsAggregator {
       const key = pn ?? id;
       const name = c.name || c.notify || c.verifiedName || this.contacts.get(key) || null;
       this.contacts.set(key, name);
+      this.mergeInfo(key, { name: c.name, notify: c.notify, verifiedName: c.verifiedName });
       // si antes lo teníamos por LID y ahora sabemos el número, unificamos
       if (lid && pn && this.contacts.has(lid)) {
         const prev = this.contacts.get(lid);
         this.contacts.delete(lid);
         if (!name && prev) this.contacts.set(key, prev);
+      }
+      if (lid && pn && lid !== key && this.contactInfo.has(lid)) {
+        this.mergeInfo(key, this.contactInfo.get(lid)!);
+        this.contactInfo.delete(lid);
       }
     }
   }
@@ -259,6 +315,7 @@ export class StatsAggregator {
       this.messages += 1;
       if (ts) {
         if (!agg.lastMessageAt || ts > agg.lastMessageAt) agg.lastMessageAt = ts;
+        if (!agg.firstMessageAt || ts < agg.firstMessageAt) agg.firstMessageAt = ts;
         if (this.oldest === null || ts < this.oldest) this.oldest = ts;
         if (this.newest === null || ts > this.newest) this.newest = ts;
       }
@@ -273,19 +330,7 @@ export class StatsAggregator {
   // ---------------------------------------------------------------- salidas
 
   summary(): SyncStats {
-    const merged = new Map<string, ChatAgg>();
-    for (const [jid, agg] of this.chats) {
-      const key = this.canonical(jid);
-      const prev = merged.get(key);
-      if (!prev) {
-        merged.set(key, { ...agg });
-      } else {
-        prev.messages += agg.messages;
-        prev.name = prev.name || agg.name;
-        prev.pushName = prev.pushName || agg.pushName || null;
-        prev.lastMessageAt = Math.max(prev.lastMessageAt ?? 0, agg.lastMessageAt ?? 0) || null;
-      }
-    }
+    const merged = this.mergedChats();
 
     let groups = 0;
     let individual = 0;
@@ -331,6 +376,81 @@ export class StatsAggregator {
     };
   }
 
+  /**
+   * Personas y grupos para exportar. Solo nombres, números, conteos y fechas:
+   * nunca el contenido de los mensajes.
+   */
+  directory(): Directory {
+    const merged = this.mergedChats();
+    const people = new Map<string, DirectoryPerson>();
+    const person = (jid: string): DirectoryPerson => {
+      let p = people.get(jid);
+      if (!p) {
+        p = {
+          jid,
+          phone: phoneOf(jid),
+          lid: isLidJid(jid) ? jid : null,
+          displayName: null,
+          savedName: null,
+          pushName: null,
+          businessName: null,
+          inAddressBook: this.hasContactInfo ? false : null,
+          messages: 0,
+          firstMessageAt: null,
+          lastMessageAt: null,
+        };
+        people.set(jid, p);
+      }
+      return p;
+    };
+
+    for (const [key, legacyName] of this.contacts) {
+      const p = person(this.canonical(key));
+      if (!p.displayName && legacyName) p.displayName = legacyName;
+    }
+    for (const [key, info] of this.contactInfo) {
+      const p = person(this.canonical(key));
+      p.savedName ||= info.name ?? null;
+      p.pushName ||= info.notify ?? null;
+      p.businessName ||= info.verifiedName ?? null;
+      if (info.name) p.inAddressBook = true;
+    }
+    const chatName = new Map<string, string | null>();
+    for (const [jid, agg] of merged) {
+      if (agg.isGroup) continue;
+      const p = person(jid);
+      p.messages = agg.messages;
+      p.firstMessageAt = agg.firstMessageAt ?? null;
+      p.lastMessageAt = agg.lastMessageAt;
+      p.pushName ||= agg.pushName ?? null;
+      chatName.set(jid, agg.name);
+    }
+    const pnToLid = new Map<string, string>();
+    for (const [lid, pn] of this.lidToPn) pnToLid.set(pn, lid);
+    for (const p of people.values()) {
+      p.lid ??= pnToLid.get(p.jid) ?? null;
+      p.displayName =
+        p.savedName || chatName.get(p.jid) || p.displayName || p.pushName || p.businessName || null;
+    }
+
+    const groups: DirectoryGroup[] = [...merged.entries()]
+      .filter(([, a]) => a.isGroup)
+      .map(([jid, a]) => ({
+        jid,
+        name: a.name,
+        messages: a.messages,
+        firstMessageAt: a.firstMessageAt ?? null,
+        lastMessageAt: a.lastMessageAt,
+      }))
+      .sort((x, y) => y.messages - x.messages || (x.name ?? '').localeCompare(y.name ?? ''));
+
+    const byActivity = (x: DirectoryPerson, y: DirectoryPerson) =>
+      y.messages - x.messages ||
+      (y.lastMessageAt ?? 0) - (x.lastMessageAt ?? 0) ||
+      (x.displayName ?? '\uffff').localeCompare(y.displayName ?? '\uffff', 'es');
+    return { people: [...people.values()].sort(byActivity), groups };
+  }
+
   snapshot(): StatsSnapshot {
     return {
       v: 1,
@@ -346,6 +466,8 @@ export class StatsAggregator {
       state: this.state,
       completionInferred: this.completionInferred,
       syncTypes: Object.fromEntries(this.syncTypes),
+      contactInfo: Object.fromEntries(this.contactInfo),
+      contactInfoComplete: this.hasContactInfo,
     };
   }
 
@@ -364,6 +486,41 @@ export class StatsAggregator {
     this.state = s.state;
     this.completionInferred = s.completionInferred;
     this.syncTypes = new Map(Object.entries(s.syncTypes));
+    this.contactInfo = new Map(Object.entries(s.contactInfo ?? {}));
+    this.hasContactInfo = s.contactInfoComplete === true;
+  }
+
+  private mergeInfo(key: string, info: ContactInfo): void {
+    const prev = this.contactInfo.get(key) ?? {};
+    const next: ContactInfo = {
+      name: info.name || prev.name || null,
+      notify: info.notify || prev.notify || null,
+      verifiedName: info.verifiedName || prev.verifiedName || null,
+    };
+    if (next.name || next.notify || next.verifiedName || this.contactInfo.has(key))
+      this.contactInfo.set(key, next);
+  }
+
+  /** chats unificados: el mismo contacto por LID y por número cuenta como uno */
+  private mergedChats(): Map<string, ChatAgg> {
+    const merged = new Map<string, ChatAgg>();
+    for (const [jid, agg] of this.chats) {
+      const key = this.canonical(jid);
+      const prev = merged.get(key);
+      if (!prev) {
+        merged.set(key, { ...agg });
+      } else {
+        prev.messages += agg.messages;
+        prev.name = prev.name || agg.name;
+        prev.pushName = prev.pushName || agg.pushName || null;
+        prev.lastMessageAt = Math.max(prev.lastMessageAt ?? 0, agg.lastMessageAt ?? 0) || null;
+        const firsts = [prev.firstMessageAt, agg.firstMessageAt].filter(
+          (t): t is number => typeof t === 'number',
+        );
+        prev.firstMessageAt = firsts.length ? Math.min(...firsts) : null;
+      }
+    }
+    return merged;
   }
 
   private ensureChat(jid: string): ChatAgg {

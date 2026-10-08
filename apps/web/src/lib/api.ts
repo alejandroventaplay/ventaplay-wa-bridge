@@ -81,7 +81,32 @@ export const api = {
   remove: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
   simulateScan: (id: string) =>
     request<{ ok: true }>(`/sessions/${id}/simulate-scan`, { method: 'POST' }),
+  /** baja el Excel de contactos y lo guarda con el nombre que propone la API */
+  downloadContactsXlsx: (id: string) => download(`/sessions/${id}/export/contacts.xlsx`),
 };
+
+/** Descarga un archivo protegido (con el token en el header) y lo guarda en el equipo. */
+async function download(path: string): Promise<string> {
+  const token = await currentToken();
+  const res = await fetch(`${API_URL}${path}`, {
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+    throw new ApiError(res.status, body.error ?? 'error', body.message ?? `Error ${res.status}`);
+  }
+  const name =
+    /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? 'export.xlsx';
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  return name;
+}
 
 /** URL del stream SSE (EventSource no permite headers: el token va en la query) */
 export async function streamUrl(path: string): Promise<string> {

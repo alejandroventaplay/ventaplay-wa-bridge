@@ -96,6 +96,7 @@ Todas las rutas, salvo `/health`, piden `Authorization: Bearer <token>` (o
 | `GET /sessions/:id`          | resumen (estado, QR, perfil, estadísticas)    |
 | `GET /sessions/:id/events`   | SSE: QR que rota, estado y sync en vivo       |
 | `GET /events`                | SSE de todas las sesiones                     |
+| `GET /sessions/:id/export/contacts.xlsx` | Excel de contactos y grupos (sin mensajes) |
 | `POST /sessions/:id/connect` | QR nuevo / reintentar                         |
 | `POST /sessions/:id/logout`  | desvincula el teléfono, conserva estadísticas |
 | `DELETE /sessions/:id`       | desvincula y borra todo                       |

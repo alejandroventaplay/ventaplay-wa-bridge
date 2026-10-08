@@ -6,7 +6,7 @@ import type { QrCode, SessionStatus, SessionSummary, WaProfile } from '@wa-bridg
 import type { SessionRecord, SessionStore } from '../store/types.js';
 import { loadAuthState, type StoredAuthState } from '../wa/auth-state.js';
 import type { SocketFactory, WaSocketLike } from '../wa/types.js';
-import { normalizeJid, phoneOf, StatsAggregator } from './stats.js';
+import { type Directory, normalizeJid, phoneOf, StatsAggregator } from './stats.js';
 
 /** WhatsApp muestra el primer QR ~60 s y los siguientes ~20 s */
 const FIRST_QR_TTL_MS = 60_000;
@@ -86,6 +86,11 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     return ['starting', 'qr', 'connecting', 'connected', 'reconnecting'].includes(
       this.record.status,
     );
+  }
+
+  /** contactos y grupos para exportar (sin contenido de mensajes) */
+  directory(): Directory {
+    return this.stats.directory();
   }
 
   summary(): SessionSummary {

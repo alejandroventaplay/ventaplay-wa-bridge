@@ -312,7 +312,15 @@ export function buildFakeHistory(seed = 42): HistoryBatch[] {
   }
   messages.sort((a, b) => Number(b.messageTimestamp) - Number(a.messageTimestamp));
 
-  const contacts = people.map((p) => ({ id: p.pn, lid: p.lid, phoneNumber: p.pn, name: p.name }));
+  const contacts = people.map((p, i) => ({
+    id: p.pn,
+    lid: p.lid,
+    phoneNumber: p.pn,
+    // a algunos no los tienes guardados: solo sabemos el nombre que se pusieron en WhatsApp
+    name: i % 7 === 6 ? null : p.name,
+    notify: p.name.split(' ')[0]!,
+    ...(i % 11 === 5 ? { verifiedName: `${p.name.split(' ')[1]} Spa` } : {}),
+  }));
   const chatObjs = chats.map((c) => ({
     id: c.id,
     name: c.name,

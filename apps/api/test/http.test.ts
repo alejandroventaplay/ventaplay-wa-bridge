@@ -120,6 +120,43 @@ describe('API HTTP', () => {
     ).toBe(404);
   });
 
+  it('exporta los contactos a Excel solo con sesión iniciada', async () => {
+    const { app } = await setup();
+    const id = (
+      await app.inject({
+        method: 'POST',
+        url: '/sessions',
+        headers: auth,
+        payload: { label: 'Cliente Y' },
+      })
+    ).json().session.id as string;
+    const get = async () =>
+      (await app.inject({ method: 'GET', url: `/sessions/${id}`, headers: auth })).json().session;
+    for (let i = 0; i < 100 && (await get()).status !== 'qr'; i++)
+      await new Promise((r) => setTimeout(r, 20));
+    await app.inject({ method: 'POST', url: `/sessions/${id}/simulate-scan`, headers: auth });
+    for (let i = 0; i < 200 && (await get()).stats.batches < 5; i++)
+      await new Promise((r) => setTimeout(r, 20));
+
+    const url = `/sessions/${id}/export/contacts.xlsx`;
+    expect((await app.inject({ method: 'GET', url })).statusCode).toBe(401);
+    const r = await app.inject({ method: 'GET', url, headers: auth });
+    expect(r.statusCode).toBe(200);
+    expect(r.headers['content-type']).toContain('spreadsheetml');
+    expect(r.headers['content-disposition']).toMatch(/attachment; filename="contactos-cliente-y-/);
+    // un .xlsx es un zip
+    expect(r.rawPayload.subarray(0, 2).toString()).toBe('PK');
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/sessions/nope/export/contacts.xlsx',
+          headers: auth,
+        })
+      ).statusCode,
+    ).toBeGreaterThanOrEqual(400);
+  });
+
   it('valida ids y cuerpos', async () => {
     const { app } = await setup();
     expect(

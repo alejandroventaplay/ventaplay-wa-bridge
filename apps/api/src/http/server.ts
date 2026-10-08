@@ -4,6 +4,7 @@ import type { Logger } from 'pino';
 import { z } from 'zod';
 import type { SessionStreamEvent, SessionSummary } from '@wa-bridge/shared';
 import type { Config } from '../config.js';
+import { buildContactsWorkbook, contactsFileName } from '../export/contacts-xlsx.js';
 import { HttpError, type SessionManager } from '../session/manager.js';
 import type { Simulator } from '../wa/simulator.js';
 import type { Authenticator, Principal } from './auth.js';
@@ -43,6 +44,8 @@ export async function buildServer(deps: ServerDeps) {
     origin: config.webOrigins.includes('*') ? true : config.webOrigins,
     methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Authorization', 'Content-Type'],
+    // para que la web lea el nombre del archivo exportado
+    exposedHeaders: ['Content-Disposition'],
   });
 
   app.setErrorHandler((err, req, reply) => {
@@ -104,6 +107,29 @@ export async function buildServer(deps: ServerDeps) {
     api.get('/sessions/:id', async (req) => {
       const { id } = IdParams.parse(req.params);
       return { session: manager.get(id).summary() };
+    });
+
+    /** Excel con contactos (nombre, teléfono, etc.) y grupos. Nunca incluye mensajes. */
+    api.get('/sessions/:id/export/contacts.xlsx', async (req, reply) => {
+      const { id } = IdParams.parse(req.params);
+      const session = manager.get(id);
+      const summary = session.summary();
+      const exportedAt = Date.now();
+      const file = await buildContactsWorkbook({
+        session: summary,
+        directory: session.directory(),
+        exportedAt,
+      });
+      const name = contactsFileName(summary, exportedAt);
+      req.log.info(
+        { session: id, by: req.principal?.email ?? req.principal?.sub, bytes: file.length },
+        'exportación de contactos a Excel',
+      );
+      return reply
+        .header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        .header('content-disposition', `attachment; filename="${name}"`)
+        .header('cache-control', 'no-store')
+        .send(file);
     });
 
     api.post('/sessions/:id/connect', async (req) => {
