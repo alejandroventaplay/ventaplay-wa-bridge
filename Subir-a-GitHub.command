@@ -17,6 +17,11 @@ if ! gh auth status >/dev/null 2>&1; then
   echo "Inicia sesión en GitHub (se abre el navegador; el login lo haces tú):"
   gh auth login --hostname github.com --git-protocol https --web || { echo "No se completó el login"; pausa; exit 1; }
 fi
+# el repo trae CI (.github/workflows): GitHub exige el permiso "workflow" para subirlo
+if ! gh auth status 2>&1 | grep -q "workflow"; then
+  echo "Falta el permiso 'workflow' en GitHub (lo apruebas tú en el navegador):"
+  gh auth refresh --hostname github.com --scopes workflow || { echo "No se completó el permiso"; pausa; exit 1; }
+fi
 gh auth setup-git >/dev/null 2>&1
 
 if git remote get-url origin >/dev/null 2>&1; then
