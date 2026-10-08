@@ -147,6 +147,8 @@ const SYNC_FULL = '2';
 const SYNC_RECENT = '3';
 /** tipos que llegan en muchos lotes y avisan su avance */
 const LONG_SYNC_TYPES = new Set([SYNC_FULL, SYNC_RECENT]);
+/** tipos que traen chats y mensajes: definen cuándo terminó el historial */
+const HISTORY_SYNC_TYPES = new Set([SYNC_BOOTSTRAP, SYNC_FULL, SYNC_RECENT]);
 /** ids recientes que recordamos para deduplicar (acota la memoria en cuentas enormes) */
 const DEDUPE_LIMIT = 200_000;
 
@@ -248,7 +250,11 @@ export class StatsAggregator {
     const recent = this.syncProgress.get(SYNC_RECENT);
     const boot = this.syncProgress.get(SYNC_BOOTSTRAP);
     this.progress = full ?? recent ?? boot ?? this.progress;
-    const types = [...this.syncTypes.values()];
+    // solo cuentan los tipos que traen historial; los de un lote (nombres, estados)
+    // no definen si terminó (y en snapshots viejos quedaban marcados como pendientes)
+    const types = [...this.syncTypes.entries()]
+      .filter(([k]) => HISTORY_SYNC_TYPES.has(k))
+      .map(([, done]) => done);
     if (this.batches > 0 && types.length > 0 && types.every(Boolean)) {
       this.state = 'complete';
       this.completionInferred = false;
@@ -578,6 +584,11 @@ export class StatsAggregator {
     // snapshots viejos daban por terminado un sync que en realidad quedó a medias
     if (this.state === 'complete' && this.completionInferred && (this.progress ?? 100) < 100)
       this.state = 'paused';
+    // con las reglas actuales, ¿ya terminó? (p.ej. FULL llegó a 100 con un tipo viejo pendiente)
+    if (this.state !== 'complete' && this.syncProgress.get(SYNC_FULL) === 100) {
+      this.syncTypes.set(SYNC_FULL, true);
+      this.refreshState();
+    }
     this.contactInfo = new Map(Object.entries(s.contactInfo ?? {}));
     this.hasContactInfo = s.contactInfoComplete === true;
   }

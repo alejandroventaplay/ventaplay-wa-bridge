@@ -155,6 +155,16 @@ describe('StatsAggregator', () => {
     });
   });
 
+  it('termina al llegar FULL a 100 aunque tipos de un lote quedaran pendientes en un snapshot viejo', () => {
+    const a = new StatsAggregator();
+    a.addHistoryBatch({ chats: [], contacts: [], messages: [], syncType: 2, progress: 98 }, 1);
+    const snap = a.snapshot();
+    snap.syncTypes = { '5': false, '1': false, '4': false, '0': true, '3': true, '2': false };
+    const b = new StatsAggregator(snap);
+    b.addHistoryBatch({ chats: [], contacts: [], messages: [], syncType: 2, progress: 100 }, 2);
+    expect(b.summary()).toMatchObject({ state: 'complete', progress: 100, fullProgress: 100 });
+  });
+
   it('un snapshot viejo que dio por completo un sync a medias queda en pausa', () => {
     const a = new StatsAggregator();
     a.addHistoryBatch({ chats: [], contacts: [], messages: [], syncType: 2, progress: 79 }, 1);
