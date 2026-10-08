@@ -31,11 +31,19 @@ async function resolveVersion(logger: Logger): Promise<WAVersion | undefined> {
   }
 }
 
-export function createBaileysFactory(opts: { proxyUrl?: string | undefined }): SocketFactory {
+export interface BaileysFactoryOptions {
+  proxyUrl?: string | undefined;
+  /** 'chrome' = WhatsApp Web (por defecto) · 'desktop' = WhatsApp Desktop (hoy WhatsApp lo rechaza) */
+  browser?: 'chrome' | 'desktop';
+  /** 'latest' = versión vigente de WA Web · 'bundled' = la de Baileys */
+  version?: 'latest' | 'bundled';
+}
+
+export function createBaileysFactory(opts: BaileysFactoryOptions = {}): SocketFactory {
   const agent = opts.proxyUrl ? new HttpsProxyAgent(opts.proxyUrl) : undefined;
 
   return async ({ auth, logger }) => {
-    const version = await resolveVersion(logger);
+    const version = opts.version === 'bundled' ? undefined : await resolveVersion(logger);
     const sock = makeWASocket({
       auth: {
         creds: auth.state.creds,
@@ -43,8 +51,9 @@ export function createBaileysFactory(opts: { proxyUrl?: string | undefined }): S
       },
       logger,
       ...(version ? { version } : {}),
-      // Nos presentamos como WhatsApp Desktop: así el teléfono entrega el historial completo
-      browser: Browsers.macOS('Desktop'),
+      // Nos presentamos como WhatsApp Web en Chrome. Como 'Desktop' el teléfono entregaría
+      // más historial, pero hoy WhatsApp corta la conexión al registrar (428).
+      browser: opts.browser === 'desktop' ? Browsers.macOS('Desktop') : Browsers.macOS('Chrome'),
       syncFullHistory: true,
       shouldSyncHistoryMessage: () => true,
       // Bajo perfil: no aparecemos "en línea" y el teléfono sigue recibiendo notificaciones

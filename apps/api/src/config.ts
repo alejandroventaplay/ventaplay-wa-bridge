@@ -8,16 +8,26 @@ const bool = z
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   HOST: z.string().default('0.0.0.0'),
-  PORT: z.coerce.number().int().positive().default(4000),
+  PORT: z.coerce.number().int().positive().default(4010),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+  /** archivo donde además se escriben los logs (opcional, útil para diagnosticar) */
+  LOG_FILE: z.string().optional(),
 
   /** orígenes permitidos para CORS, separados por coma */
-  WEB_ORIGIN: z.string().default('http://localhost:5173'),
+  WEB_ORIGIN: z.string().default('http://localhost:5190'),
 
   /** 'baileys' = WhatsApp real · 'simulator' = QR y datos falsos para desarrollar la UI */
   WA_DRIVER: z.enum(['baileys', 'simulator']).default('baileys'),
   /** proxy HTTP(S) para el WebSocket de WhatsApp (opcional) */
   WA_PROXY_URL: z.string().url().optional(),
+  /**
+   * Cómo nos presentamos ante WhatsApp. 'chrome' = WhatsApp Web (funciona).
+   * 'desktop' = WhatsApp Desktop: pediría más historial, pero WhatsApp corta la
+   * conexión al registrar (428 Connection Terminated, visto en oct-2026).
+   */
+  WA_BROWSER: z.enum(['chrome', 'desktop']).default('chrome'),
+  /** 'latest' = consulta la versión vigente de WA Web · 'bundled' = la que trae Baileys */
+  WA_VERSION: z.enum(['latest', 'bundled']).default('latest'),
 
   /** 'file' = carpeta local cifrada · 'postgres' = DATABASE_URL (Supabase) */
   STORAGE: z.enum(['file', 'postgres']).default('file'),

@@ -13,18 +13,29 @@ import { createSimulator } from './wa/simulator.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const logger = pino({
-    level: config.LOG_LEVEL,
-    redact: ['req.headers.authorization'],
-    serializers: {
-      // sin query string: en los streams SSE ahí viaja el token
-      req: (req: { method?: string; url?: string; id?: string }) => ({
-        id: req.id,
-        method: req.method,
-        url: req.url?.split('?')[0],
-      }),
+  const logger = pino(
+    {
+      level: config.LOG_LEVEL,
+      redact: ['req.headers.authorization'],
+      serializers: {
+        // sin query string: en los streams SSE ahí viaja el token
+        req: (req: { method?: string; url?: string; id?: string }) => ({
+          id: req.id,
+          method: req.method,
+          url: req.url?.split('?')[0],
+        }),
+      },
     },
-  });
+    config.LOG_FILE
+      ? pino.multistream([
+          { level: 'trace', stream: process.stdout },
+          {
+            level: 'trace',
+            stream: pino.destination({ dest: config.LOG_FILE, mkdir: true, sync: true }),
+          },
+        ])
+      : undefined,
+  );
 
   // ---- cifrado
   let keyHex = config.ENCRYPTION_KEY;
@@ -49,7 +60,11 @@ async function main(): Promise<void> {
   const simulator = config.WA_DRIVER === 'simulator' ? createSimulator() : null;
   const socketFactory = simulator
     ? simulator.factory
-    : createBaileysFactory({ proxyUrl: config.WA_PROXY_URL });
+    : createBaileysFactory({
+        proxyUrl: config.WA_PROXY_URL,
+        browser: config.WA_BROWSER,
+        version: config.WA_VERSION,
+      });
 
   const manager = new SessionManager({
     store,

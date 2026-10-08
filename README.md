@@ -33,26 +33,39 @@ packages/shared  tipos compartidos (SessionSummary, SyncStats…)
 
 ## Correr en local
 
-Requisitos: Node 22 y pnpm 10 (`corepack enable`).
+Requisitos: Node 22 o más. pnpm se instala solo si falta.
+
+**En Mac, con doble clic:** abre `Iniciar-WA-Bridge.command` (la primera vez:
+clic derecho → Abrir). Instala dependencias, levanta API y web y abre
+http://localhost:5190.
+
+**A mano:**
 
 ```bash
 pnpm install
 cp apps/api/.env.example apps/api/.env
 cp apps/web/.env.example apps/web/.env
-pnpm dev            # API en :4000 y web en :5173
+pnpm dev            # API en :4010 y web en :5190
 ```
 
-Abre http://localhost:5173 y entra con el `API_TOKEN` del `.env`.
+Abre http://localhost:5190 y entra con el `API_TOKEN` del `.env`.
 
-- **Con el simulador** (`WA_DRIVER=simulator`, viene así por defecto): aparece un
+- **Con el simulador** (`WA_DRIVER=simulator`, viene así en `.env.example`): aparece un
   botón "Simular escaneo" que trae un historial falso.
 - **Con WhatsApp real**: cambia a `WA_DRIVER=baileys` en `apps/api/.env`, reinicia y
   escanea con el teléfono (WhatsApp → Dispositivos vinculados → Vincular un dispositivo).
   Deja el teléfono encendido mientras se copia el historial.
 
-> El servidor tiene que poder abrir un **WebSocket** a `web.whatsapp.com`. Algunos
-> proxies corporativos o sandboxes lo bloquean: en ese caso conecta, pero WhatsApp
-> cierra la conexión antes de mostrar el QR (código 428).
+Notas:
+
+- La web llama a la API por `/wa-api` (proxy de Vite al puerto 4010). Así comparten
+  origen y ningún navegador bloquea las llamadas.
+- Nos presentamos ante WhatsApp como **WhatsApp Web en Chrome** (`WA_BROWSER=chrome`).
+  Como "WhatsApp Desktop" el teléfono daría más historial, pero hoy WhatsApp corta la
+  conexión al registrar (código 428).
+- Para diagnosticar, `LOG_FILE=./data/api.log` deja los logs también en un archivo.
+- El servidor tiene que poder abrir un **WebSocket** a `web.whatsapp.com`. Algunos
+  proxies o sandboxes lo bloquean (también da 428 antes del QR).
 
 ## Comandos
 

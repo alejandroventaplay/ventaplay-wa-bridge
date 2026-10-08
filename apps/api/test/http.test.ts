@@ -224,6 +224,15 @@ describe('config', () => {
       }),
     ).toThrow(/simulator/);
   });
+
+  it('por defecto se presenta como WhatsApp Web en Chrome y usa los puertos locales', () => {
+    const c = loadConfig({});
+    expect(c.WA_BROWSER).toBe('chrome');
+    expect(c.WA_VERSION).toBe('latest');
+    expect(c.PORT).toBe(4010);
+    expect(c.webOrigins).toContain('http://localhost:5190');
+    expect(() => loadConfig({ WA_BROWSER: 'firefox' })).toThrow();
+  });
 });
 
 describe('seguridad del token', () => {

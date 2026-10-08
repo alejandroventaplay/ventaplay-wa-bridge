@@ -9,7 +9,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "pnpm -r --parallel --filter ./apps/* dev",
+    "dev": "pnpm -r --parallel --filter \"./apps/*\" dev",
     "dev:api": "pnpm --filter @wa-bridge/api dev",
     "dev:web": "pnpm --filter @wa-bridge/web dev",
     "build": "pnpm -r build",

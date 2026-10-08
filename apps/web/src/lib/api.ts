@@ -2,9 +2,10 @@ import type { SessionSummary } from '@wa-bridge/shared';
 import { storage } from './storage';
 import { supabase } from './supabase';
 
-export const API_URL = (
-  (import.meta.env.VITE_API_URL as string | undefined) || 'http://localhost:4000'
-).replace(/\/$/, '');
+export const API_URL = ((import.meta.env.VITE_API_URL as string | undefined) || '/wa-api').replace(
+  /\/$/,
+  '',
+);
 const TOKEN_KEY = 'wa-bridge-token';
 
 export interface Health {
@@ -85,7 +86,7 @@ export const api = {
 /** URL del stream SSE (EventSource no permite headers: el token va en la query) */
 export async function streamUrl(path: string): Promise<string> {
   const token = await currentToken();
-  const u = new URL(`${API_URL}${path}`);
+  const u = new URL(`${API_URL}${path}`, window.location.origin);
   if (token) u.searchParams.set('access_token', token);
   return u.toString();
 }
