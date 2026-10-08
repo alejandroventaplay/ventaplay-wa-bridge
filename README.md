@@ -67,6 +67,12 @@ Notas:
 - El servidor tiene que poder abrir un **WebSocket** a `web.whatsapp.com`. Algunos
   proxies o sandboxes lo bloquean (también da 428 antes del QR).
 
+## Repositorio
+
+`Subir-a-GitHub.command` (doble clic en Mac) crea el repo privado
+`alejandroventaplay/ventaplay-wa-bridge` con GitHub CLI y sube el código; si ya
+existe, solo hace `git push`. El login en GitHub lo hace la persona, en el navegador.
+
 ## Comandos
 
 | Comando          | Qué hace                                  |
