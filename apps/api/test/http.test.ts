@@ -48,7 +48,7 @@ async function setup(env: Record<string, string> = {}) {
     () => manager.shutdown(),
     () => app.close(),
   );
-  return { app, manager };
+  return { app, manager, store: t.store };
 }
 
 const auth = { authorization: `Bearer ${TOKEN}` };
@@ -121,7 +121,7 @@ describe('API HTTP', () => {
   });
 
   it('exporta los contactos a Excel solo con sesión iniciada', async () => {
-    const { app } = await setup();
+    const { app, store } = await setup();
     const id = (
       await app.inject({
         method: 'POST',
@@ -138,12 +138,33 @@ describe('API HTTP', () => {
     for (let i = 0; i < 200 && (await get()).stats.batches < 5; i++)
       await new Promise((r) => setTimeout(r, 20));
 
+    // un par LID → número que Baileys guardó en sus llaves se suma al exportar
+    await store.writeAuth(id, {
+      'lid-mapping:999999999999_reverse': JSON.stringify('56977778888'),
+    });
+    const before = (await get()).stats.lidMappings as number;
+    const preview = (
+      await app.inject({ method: 'GET', url: `/sessions/${id}/export/preview`, headers: auth })
+    ).json();
+    expect(preview).toMatchObject({ total: 48, noPhone: 0, groups: 6 });
+    expect(preview.useful).toBeGreaterThan(0);
+    for (let i = 0; i < 50 && (await get()).stats.lidMappings === before; i++)
+      await new Promise((r) => setTimeout(r, 20));
+    expect((await get()).stats.lidMappings).toBe(before + 1);
+
     const url = `/sessions/${id}/export/contacts.xlsx`;
     expect((await app.inject({ method: 'GET', url })).statusCode).toBe(401);
     const r = await app.inject({ method: 'GET', url, headers: auth });
     expect(r.statusCode).toBe(200);
     expect(r.headers['content-type']).toContain('spreadsheetml');
-    expect(r.headers['content-disposition']).toMatch(/attachment; filename="contactos-cliente-y-/);
+    expect(r.headers['content-disposition']).toMatch(
+      /attachment; filename="contactos-util-cliente-y-/,
+    );
+    const full = await app.inject({ method: 'GET', url: `${url}?modo=completo`, headers: auth });
+    expect(full.headers['content-disposition']).toMatch(/filename="contactos-cliente-y-/);
+    expect(
+      (await app.inject({ method: 'GET', url: `${url}?modo=raro`, headers: auth })).statusCode,
+    ).toBe(400);
     // un .xlsx es un zip
     expect(r.rawPayload.subarray(0, 2).toString()).toBe('PK');
     expect(

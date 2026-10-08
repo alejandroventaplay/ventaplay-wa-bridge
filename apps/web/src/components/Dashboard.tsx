@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   BadgeCheck,
   CalendarRange,
@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import type { SessionSummary, SyncStats, TopChat } from '@wa-bridge/shared';
 import { useNow } from '../hooks/streams';
-import { api } from '../lib/api';
+import { api, type ExportPreview } from '../lib/api';
 import { fmtAgo, fmtDate, fmtNumber, fmtPhone, fmtSpan } from '../lib/format';
 import { Avatar, Spinner } from './ui';
 
@@ -137,49 +137,85 @@ function ExcelContactsExporter({
   session: SessionSummary;
   disabled: boolean;
 }) {
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<'util' | 'completo' | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<ExportPreview | null>(null);
   const { stats } = session;
 
-  async function run() {
-    setBusy(true);
+  // se recalcula cuando llegan contactos o números nuevos (con calma: el sync manda muchos lotes)
+  useEffect(() => {
+    if (disabled) return;
+    let alive = true;
+    const t = setTimeout(() => {
+      api
+        .exportPreview(session.id)
+        .then((p) => alive && setPreview(p))
+        .catch(() => {});
+    }, 800);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [session.id, disabled, stats.contacts, stats.chats, stats.lidMappings]);
+
+  async function run(modo: 'util' | 'completo') {
+    setBusy(modo);
     setError(null);
     setDone(null);
     try {
-      setDone(await api.downloadContactsXlsx(session.id));
+      setDone(await api.downloadContactsXlsx(session.id, modo));
     } catch (err) {
       setError((err as Error).message);
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
   return (
-    <li className="flex flex-col gap-3 py-4 first:pt-0 sm:flex-row sm:items-center">
+    <li className="flex flex-col gap-4 py-4 first:pt-0 sm:flex-row sm:items-start">
       <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-green-50 text-green-700">
         <FileSpreadsheet className="size-5" />
       </span>
       <div className="min-w-0 flex-1">
         <p className="font-black">Excel de contactos</p>
         <p className="text-sm text-ink-soft">
-          Nombre, teléfono (+56…), nombre en la agenda y en WhatsApp, empresa, cantidad de mensajes
-          y fechas. Trae además una hoja con los grupos.
+          <b className="text-ink">Útil:</b> solo contactos con nombre y celular, listos para el CRM.{' '}
+          <b className="text-ink">Completa:</b> todo lo que llegó, con grupos e IDs de WhatsApp.
         </p>
-        <p className="mt-1 text-xs font-bold text-ink-soft">
-          {fmtNumber(stats.contacts)} contactos · {fmtNumber(stats.individualChats)} chats ·{' '}
-          {fmtNumber(stats.groups)} grupos
-        </p>
+        {preview ? (
+          <p className="mt-2 text-xs leading-relaxed text-ink-soft">
+            <b className="text-green-700">{fmtNumber(preview.useful)} útiles</b> de{' '}
+            {fmtNumber(preview.total)} contactos. Quedan fuera{' '}
+            <b>{fmtNumber(preview.noPhone)} sin número</b> (WhatsApp solo nos dio su ID interno) y{' '}
+            <b>{fmtNumber(preview.noName)} sin nombre</b>.
+          </p>
+        ) : (
+          <p className="mt-2 text-xs font-bold text-ink-soft">
+            {fmtNumber(stats.contacts)} contactos · {fmtNumber(stats.groups)} grupos
+          </p>
+        )}
         {done && <p className="mt-1 text-xs font-bold text-green-700">Descargado: {done}</p>}
         {error && <p className="mt-1 text-xs font-bold text-danger">{error}</p>}
       </div>
-      <button
-        className="btn-primary self-start sm:self-center"
-        onClick={() => void run()}
-        disabled={disabled || busy}
-      >
-        {busy ? <Spinner className="size-4" /> : <Download className="size-4" />} Descargar Excel
-      </button>
+      <div className="flex shrink-0 flex-wrap gap-2 sm:flex-col sm:items-stretch">
+        <button
+          className="btn-primary"
+          onClick={() => void run('util')}
+          disabled={disabled || busy !== null}
+        >
+          {busy === 'util' ? <Spinner className="size-4" /> : <Download className="size-4" />}{' '}
+          Descargar útil{preview ? ` (${fmtNumber(preview.useful)})` : ''}
+        </button>
+        <button
+          className="btn-secondary"
+          onClick={() => void run('completo')}
+          disabled={disabled || busy !== null}
+        >
+          {busy === 'completo' ? <Spinner className="size-4" /> : <Download className="size-4" />}{' '}
+          Completa{preview ? ` (${fmtNumber(preview.total)})` : ''}
+        </button>
+      </div>
     </li>
   );
 }

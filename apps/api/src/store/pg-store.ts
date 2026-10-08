@@ -86,6 +86,14 @@ export class PgSessionStore implements SessionStore {
     return out;
   }
 
+  async listAuthKeys(sessionId: string, prefix: string): Promise<string[]> {
+    const { rows } = await this.pool.query<{ key: string }>(
+      'select key from wa_bridge_auth where session_id = $1 and starts_with(key, $2)',
+      [sessionId, prefix],
+    );
+    return rows.map((r) => r.key);
+  }
+
   async writeAuth(sessionId: string, entries: Record<string, string | null>): Promise<void> {
     const upserts = Object.entries(entries).filter((e): e is [string, string] => e[1] !== null);
     const deletes = Object.entries(entries)

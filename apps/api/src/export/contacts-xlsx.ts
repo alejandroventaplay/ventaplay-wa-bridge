@@ -1,6 +1,9 @@
 import ExcelJS from 'exceljs';
 import type { SessionSummary } from '@wa-bridge/shared';
-import type { Directory } from '../session/stats.js';
+import { StatsAggregator, type Directory } from '../session/stats.js';
+
+/** util = solo con nombre y celular (para el CRM) · completo = todo lo que llegó */
+export type ContactsExportMode = 'util' | 'completo';
 
 /** zona horaria en que mostramos las fechas del Excel */
 const TZ = 'America/Santiago';
@@ -51,13 +54,17 @@ function styleHeader(ws: ExcelJS.Worksheet): void {
 export interface ContactsExportInput {
   session: SessionSummary;
   directory: Directory;
+  mode?: ContactsExportMode;
   exportedAt?: number;
 }
 
 /** Arma el Excel de contactos: hojas Contactos, Grupos y Resumen. */
 export async function buildContactsWorkbook(input: ContactsExportInput): Promise<Buffer> {
   const { session, directory } = input;
+  const mode = input.mode ?? 'completo';
   const exportedAt = input.exportedAt ?? Date.now();
+  const split = StatsAggregator.classify(directory);
+  const people = mode === 'util' ? split.useful : directory.people;
   const wb = new ExcelJS.Workbook();
   wb.creator = 'VentaPlay WA Bridge';
   wb.created = new Date(exportedAt);
@@ -74,9 +81,9 @@ export async function buildContactsWorkbook(input: ContactsExportInput): Promise
     { header: 'Mensajes', key: 'messages', width: 11 },
     { header: 'Primer mensaje', key: 'first', width: 17 },
     { header: 'Último mensaje', key: 'last', width: 17 },
-    { header: 'ID de WhatsApp', key: 'jid', width: 34 },
+    ...(mode === 'completo' ? [{ header: 'ID de WhatsApp', key: 'jid', width: 34 }] : []),
   ];
-  for (const p of directory.people) {
+  for (const p of people) {
     contacts.addRow({
       name: p.displayName,
       phone: e164(p.phone),
@@ -95,30 +102,31 @@ export async function buildContactsWorkbook(input: ContactsExportInput): Promise
   contacts.getColumn('last').numFmt = DATE_FMT;
   styleHeader(contacts);
 
-  // ------------------------------------------------------------ Grupos
-  const groups = wb.addWorksheet('Grupos');
-  groups.columns = [
-    { header: 'Grupo', key: 'name', width: 36 },
-    { header: 'Mensajes', key: 'messages', width: 11 },
-    { header: 'Primer mensaje', key: 'first', width: 17 },
-    { header: 'Último mensaje', key: 'last', width: 17 },
-    { header: 'ID de WhatsApp', key: 'jid', width: 34 },
-  ];
-  for (const g of directory.groups) {
-    groups.addRow({
-      name: g.name,
-      messages: g.messages,
-      first: toLocalExcelDate(g.firstMessageAt),
-      last: toLocalExcelDate(g.lastMessageAt),
-      jid: g.jid,
-    });
+  // ------------------------------------------------------------ Grupos (solo completo)
+  const groups = mode === 'completo' ? wb.addWorksheet('Grupos') : null;
+  if (groups) {
+    groups.columns = [
+      { header: 'Grupo', key: 'name', width: 36 },
+      { header: 'Mensajes', key: 'messages', width: 11 },
+      { header: 'Primer mensaje', key: 'first', width: 17 },
+      { header: 'Último mensaje', key: 'last', width: 17 },
+      { header: 'ID de WhatsApp', key: 'jid', width: 34 },
+    ];
+    for (const g of directory.groups) {
+      groups.addRow({
+        name: g.name,
+        messages: g.messages,
+        first: toLocalExcelDate(g.firstMessageAt),
+        last: toLocalExcelDate(g.lastMessageAt),
+        jid: g.jid,
+      });
+    }
+    groups.getColumn('first').numFmt = DATE_FMT;
+    groups.getColumn('last').numFmt = DATE_FMT;
+    styleHeader(groups);
   }
-  groups.getColumn('first').numFmt = DATE_FMT;
-  groups.getColumn('last').numFmt = DATE_FMT;
-  styleHeader(groups);
 
   // ------------------------------------------------------------ Resumen
-  const withPhone = directory.people.filter((p) => p.phone).length;
   const summary = wb.addWorksheet('Resumen');
   summary.columns = [
     { header: 'Dato', key: 'k', width: 30 },
@@ -129,10 +137,13 @@ export async function buildContactsWorkbook(input: ContactsExportInput): Promise
     ['Número', e164(session.profile?.phone ?? null)],
     ['Nombre del perfil', session.profile?.name ?? null],
     ['Exportado', toLocalExcelDate(exportedAt)],
-    ['Contactos', directory.people.length],
-    ['Contactos con teléfono', withPhone],
-    ['Contactos solo con ID (sin número)', directory.people.length - withPhone],
-    ['Grupos', directory.groups.length],
+    ['Tipo de descarga', mode === 'util' ? 'Útil para el CRM (con nombre y celular)' : 'Completa'],
+    ['Contactos en este archivo', people.length],
+    ['Contactos con nombre y celular', split.useful.length],
+    ['Sin número (solo ID interno de WhatsApp)', split.noPhone],
+    ['Con número pero sin nombre', split.noName],
+    ['Contactos en total', split.total],
+    ['Grupos', split.groups],
     ['Mensajes en el historial', session.stats.messages],
     ['Mensaje más antiguo', toLocalExcelDate(session.stats.oldestMessageAt)],
     ['Mensaje más reciente', toLocalExcelDate(session.stats.newestMessageAt)],
@@ -150,7 +161,11 @@ export async function buildContactsWorkbook(input: ContactsExportInput): Promise
 }
 
 /** contactos-barberia-don-pepe-2026-10-07.xlsx */
-export function contactsFileName(session: SessionSummary, exportedAt = Date.now()): string {
+export function contactsFileName(
+  session: SessionSummary,
+  exportedAt = Date.now(),
+  mode: ContactsExportMode = 'completo',
+): string {
   const base = session.label ?? session.profile?.name ?? session.profile?.phone ?? 'whatsapp';
   const slug =
     base
@@ -161,5 +176,5 @@ export function contactsFileName(session: SessionSummary, exportedAt = Date.now(
       .replace(/^-+|-+$/g, '')
       .slice(0, 40) || 'whatsapp';
   const d = toLocalExcelDate(exportedAt)!.toISOString().slice(0, 10);
-  return `contactos-${slug}-${d}.xlsx`;
+  return `contactos-${mode === 'util' ? 'util-' : ''}${slug}-${d}.xlsx`;
 }

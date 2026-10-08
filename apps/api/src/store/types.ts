@@ -39,4 +39,6 @@ export interface SessionStore {
   /** `null` borra la clave */
   writeAuth(sessionId: string, entries: Record<string, string | null>): Promise<void>;
   clearAuth(sessionId: string): Promise<void>;
+  /** claves guardadas que empiezan con `prefix` (sin sus valores) */
+  listAuthKeys(sessionId: string, prefix: string): Promise<string[]>;
 }

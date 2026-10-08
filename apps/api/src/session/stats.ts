@@ -104,6 +104,17 @@ export interface Directory {
   groups: DirectoryGroup[];
 }
 
+export interface DirectoryClassification {
+  /** con nombre y celular: lo que sirve para el CRM */
+  useful: DirectoryPerson[];
+  total: number;
+  /** sin número: solo conocemos su ID interno de WhatsApp (LID) */
+  noPhone: number;
+  /** con número pero sin nombre */
+  noName: number;
+  groups: number;
+}
+
 /** Estado serializable del agregador, para continuar tras un reinicio. */
 export interface StatsSnapshot {
   v: 1;
@@ -131,6 +142,15 @@ const TOP_N = 10;
 const DEDUPE_LIMIT = 200_000;
 
 export const isGroupJid = (jid: string) => jid.endsWith('@g.us');
+
+/**
+ * Un nombre de verdad tiene al menos una letra. WhatsApp a veces entrega como
+ * "nombre" el número enmascarado (p.ej. "+56 ·······78"): eso no sirve.
+ */
+export function realName(name: string | null | undefined): string | null {
+  const n = name?.trim();
+  return n && /\p{L}/u.test(n) ? n : null;
+}
 export const isUserJid = (jid: string) =>
   jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us') || jid.endsWith('@lid');
 export const isLidJid = (jid: string) => jid.endsWith('@lid');
@@ -238,9 +258,14 @@ export class StatsAggregator {
     if (this.state === 'waiting' && this.batches > 0) this.state = 'complete';
   }
 
-  addLidMapping(m: LidMappingLike): void {
-    if (!m?.lid || !m?.pn) return;
-    this.lidToPn.set(normalizeJid(m.lid), normalizeJid(m.pn));
+  /** true si el par es nuevo o cambió */
+  addLidMapping(m: LidMappingLike): boolean {
+    if (!m?.lid || !m?.pn) return false;
+    const lid = normalizeJid(m.lid);
+    const pn = normalizeJid(m.pn);
+    if (this.lidToPn.get(lid) === pn) return false;
+    this.lidToPn.set(lid, pn);
+    return true;
   }
 
   addContacts(contacts: ContactLike[]): void {
@@ -299,6 +324,13 @@ export class StatsAggregator {
       const alt = m.key?.remoteJidAlt ? normalizeJid(m.key.remoteJidAlt) : null;
       if (alt && isLidJid(jid) && !isLidJid(alt)) this.lidToPn.set(jid, alt);
       if (alt && !isLidJid(jid) && isLidJid(alt)) this.lidToPn.set(alt, jid);
+      // en grupos, el autor también viene por LID y a veces con su número como alternativo
+      const part = m.key?.participant ? normalizeJid(m.key.participant) : null;
+      const partAlt = m.key?.participantAlt ? normalizeJid(m.key.participantAlt) : null;
+      if (part && partAlt && isLidJid(part) !== isLidJid(partAlt)) {
+        if (isLidJid(part)) this.lidToPn.set(part, partAlt);
+        else this.lidToPn.set(partAlt, part);
+      }
 
       const dedupeKey = `${jid}|${msgId}`;
       if (this.seenMessages.has(dedupeKey)) continue;
@@ -406,13 +438,13 @@ export class StatsAggregator {
 
     for (const [key, legacyName] of this.contacts) {
       const p = person(this.canonical(key));
-      if (!p.displayName && legacyName) p.displayName = legacyName;
+      p.displayName ||= realName(legacyName);
     }
     for (const [key, info] of this.contactInfo) {
       const p = person(this.canonical(key));
-      p.savedName ||= info.name ?? null;
-      p.pushName ||= info.notify ?? null;
-      p.businessName ||= info.verifiedName ?? null;
+      p.savedName ||= realName(info.name);
+      p.pushName ||= realName(info.notify);
+      p.businessName ||= realName(info.verifiedName);
       if (info.name) p.inAddressBook = true;
     }
     const chatName = new Map<string, string | null>();
@@ -422,8 +454,8 @@ export class StatsAggregator {
       p.messages = agg.messages;
       p.firstMessageAt = agg.firstMessageAt ?? null;
       p.lastMessageAt = agg.lastMessageAt;
-      p.pushName ||= agg.pushName ?? null;
-      chatName.set(jid, agg.name);
+      p.pushName ||= realName(agg.pushName);
+      chatName.set(jid, realName(agg.name));
     }
     const pnToLid = new Map<string, string>();
     for (const [lid, pn] of this.lidToPn) pnToLid.set(pn, lid);
@@ -449,6 +481,19 @@ export class StatsAggregator {
       (y.lastMessageAt ?? 0) - (x.lastMessageAt ?? 0) ||
       (x.displayName ?? '\uffff').localeCompare(y.displayName ?? '\uffff', 'es');
     return { people: [...people.values()].sort(byActivity), groups };
+  }
+
+  /** el mismo directorio, separado en lo que sirve para el CRM y lo que no */
+  static classify(dir: Directory): DirectoryClassification {
+    const useful: DirectoryPerson[] = [];
+    let noPhone = 0;
+    let noName = 0;
+    for (const p of dir.people) {
+      if (!p.phone) noPhone += 1;
+      else if (!p.displayName) noName += 1;
+      else useful.push(p);
+    }
+    return { useful, total: dir.people.length, noPhone, noName, groups: dir.groups.length };
   }
 
   snapshot(): StatsSnapshot {

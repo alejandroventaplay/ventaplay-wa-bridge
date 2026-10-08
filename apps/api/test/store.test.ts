@@ -82,3 +82,23 @@ describe('auth state cifrado', () => {
     expect((await loadAuthState(t.store, id)).isLinked()).toBe(false);
   });
 });
+
+describe('listAuthKeys', () => {
+  it('lista solo las claves con el prefijo pedido', async () => {
+    const t = await tempStore();
+    try {
+      await t.store.writeAuth('s-1', {
+        'lid-mapping:111_reverse': '"56911112222"',
+        'lid-mapping:56911112222': '"111"',
+        'session:abc': '{}',
+      });
+      expect((await t.store.listAuthKeys('s-1', 'lid-mapping:')).sort()).toEqual([
+        'lid-mapping:111_reverse',
+        'lid-mapping:56911112222',
+      ]);
+      expect(await t.store.listAuthKeys('otra', 'lid-mapping:')).toEqual([]);
+    } finally {
+      await t.cleanup();
+    }
+  });
+});

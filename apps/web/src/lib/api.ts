@@ -16,6 +16,17 @@ export interface Health {
   readOnly: true;
 }
 
+export interface ExportPreview {
+  /** con nombre y celular */
+  useful: number;
+  total: number;
+  /** sin número: solo ID interno de WhatsApp */
+  noPhone: number;
+  /** con número pero sin nombre */
+  noName: number;
+  groups: number;
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -81,8 +92,11 @@ export const api = {
   remove: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
   simulateScan: (id: string) =>
     request<{ ok: true }>(`/sessions/${id}/simulate-scan`, { method: 'POST' }),
+  /** cuántos contactos sirven para el CRM y cuántos quedan fuera */
+  exportPreview: (id: string) => request<ExportPreview>(`/sessions/${id}/export/preview`),
   /** baja el Excel de contactos y lo guarda con el nombre que propone la API */
-  downloadContactsXlsx: (id: string) => download(`/sessions/${id}/export/contacts.xlsx`),
+  downloadContactsXlsx: (id: string, modo: 'util' | 'completo') =>
+    download(`/sessions/${id}/export/contacts.xlsx?modo=${modo}`),
 };
 
 /** Descarga un archivo protegido (con el token en el header) y lo guarda en el equipo. */

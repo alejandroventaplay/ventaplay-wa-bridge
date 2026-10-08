@@ -79,6 +79,14 @@ export class FileSessionStore implements SessionStore {
     );
   }
 
+  async listAuthKeys(sessionId: string, prefix: string): Promise<string[]> {
+    const names = await readdir(join(this.sessionDir(sessionId), 'auth')).catch(() => []);
+    return names
+      .filter((n) => n.endsWith('.enc'))
+      .map((n) => Buffer.from(n.slice(0, -4), 'base64url').toString())
+      .filter((k) => k.startsWith(prefix));
+  }
+
   async clearAuth(sessionId: string): Promise<void> {
     await rm(join(this.sessionDir(sessionId), 'auth'), { recursive: true, force: true });
   }

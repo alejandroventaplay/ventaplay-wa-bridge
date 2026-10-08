@@ -20,6 +20,8 @@ const MAX_UNLINKED_ATTEMPTS = 5;
 const MAX_BAD_SESSION_STREAK = 3;
 const EMIT_THROTTLE_MS = 300;
 const PERSIST_THROTTLE_MS = 2_000;
+/** cada cuánto releemos los mapeos LID → número guardados por Baileys */
+const LID_RELOAD_MS = 30_000;
 
 export interface WaSessionDeps {
   store: SessionStore;
@@ -88,9 +90,41 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     );
   }
 
-  /** contactos y grupos para exportar (sin contenido de mensajes) */
-  directory(): Directory {
+  /**
+   * Contactos y grupos para exportar (sin contenido de mensajes). Antes suma los
+   * pares LID → número que Baileys guardó en sus llaves: son muchos más que los
+   * que llegan como eventos y permiten mostrar el celular de quien solo vino por LID.
+   */
+  async directory(): Promise<Directory> {
+    await this.loadStoredLidMappings();
     return this.stats.directory();
+  }
+
+  private lidMappingsLoadedAt = 0;
+
+  private async loadStoredLidMappings(): Promise<void> {
+    if (Date.now() - this.lidMappingsLoadedAt < LID_RELOAD_MS) return;
+    this.lidMappingsLoadedAt = Date.now();
+    try {
+      const keys = (await this.deps.store.listAuthKeys(this.id, 'lid-mapping:')).filter((k) =>
+        k.endsWith('_reverse'),
+      );
+      const values = await this.deps.store.readAuth(this.id, keys);
+      let added = 0;
+      for (const [key, json] of values) {
+        const lidUser = key.slice('lid-mapping:'.length, -'_reverse'.length);
+        const pnUser = JSON.parse(json) as unknown;
+        if (!lidUser || typeof pnUser !== 'string' || !/^\d{6,15}$/.test(pnUser)) continue;
+        if (this.stats.addLidMapping({ lid: `${lidUser}@lid`, pn: `${pnUser}@s.whatsapp.net` }))
+          added += 1;
+      }
+      if (added) {
+        this.log.info({ added, total: keys.length }, 'números recuperados de las llaves LID');
+        this.touch();
+      }
+    } catch (err) {
+      this.log.warn({ err }, 'no se pudieron leer los mapeos LID guardados');
+    }
   }
 
   summary(): SessionSummary {

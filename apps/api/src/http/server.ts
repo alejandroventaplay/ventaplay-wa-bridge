@@ -6,6 +6,7 @@ import type { SessionStreamEvent, SessionSummary } from '@wa-bridge/shared';
 import type { Config } from '../config.js';
 import { buildContactsWorkbook, contactsFileName } from '../export/contacts-xlsx.js';
 import { HttpError, type SessionManager } from '../session/manager.js';
+import { StatsAggregator } from '../session/stats.js';
 import type { Simulator } from '../wa/simulator.js';
 import type { Authenticator, Principal } from './auth.js';
 
@@ -25,6 +26,7 @@ export interface ServerDeps {
 }
 
 const IdParams = z.object({ id: z.string().uuid() });
+const ExportQuery = z.object({ modo: z.enum(['util', 'completo']).default('util') });
 const CreateBody = z.object({ label: z.string().trim().max(80).nullish() }).nullish();
 const HEARTBEAT_MS = 20_000;
 
@@ -109,20 +111,33 @@ export async function buildServer(deps: ServerDeps) {
       return { session: manager.get(id).summary() };
     });
 
-    /** Excel con contactos (nombre, teléfono, etc.) y grupos. Nunca incluye mensajes. */
+    /** Cuántos contactos sirven para el CRM y cuántos quedan fuera (y por qué). */
+    api.get('/sessions/:id/export/preview', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      const { useful, ...counts } = StatsAggregator.classify(await manager.get(id).directory());
+      return { useful: useful.length, ...counts };
+    });
+
+    /**
+     * Excel de contactos. `modo=util` (por defecto): solo con nombre y celular.
+     * `modo=completo`: todo, más grupos e IDs. Nunca incluye mensajes.
+     */
     api.get('/sessions/:id/export/contacts.xlsx', async (req, reply) => {
       const { id } = IdParams.parse(req.params);
+      const { modo } = ExportQuery.parse(req.query);
       const session = manager.get(id);
+      const directory = await session.directory();
       const summary = session.summary();
       const exportedAt = Date.now();
       const file = await buildContactsWorkbook({
         session: summary,
-        directory: session.directory(),
+        directory,
+        mode: modo,
         exportedAt,
       });
-      const name = contactsFileName(summary, exportedAt);
+      const name = contactsFileName(summary, exportedAt, modo);
       req.log.info(
-        { session: id, by: req.principal?.email ?? req.principal?.sub, bytes: file.length },
+        { session: id, modo, by: req.principal?.email ?? req.principal?.sub, bytes: file.length },
         'exportación de contactos a Excel',
       );
       return reply

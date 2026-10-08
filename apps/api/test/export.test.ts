@@ -7,7 +7,7 @@ import {
   e164,
   toLocalExcelDate,
 } from '../src/export/contacts-xlsx.js';
-import { StatsAggregator } from '../src/session/stats.js';
+import { realName, StatsAggregator } from '../src/session/stats.js';
 import { buildFakeHistory } from '../src/wa/simulator.js';
 
 const PN = '56911112222@s.whatsapp.net';
@@ -114,6 +114,56 @@ describe('agenda para exportar', () => {
   });
 });
 
+describe('descarga útil', () => {
+  it('un número enmascarado o solo símbolos no cuenta como nombre', () => {
+    expect(realName('+56 ·······78')).toBeNull();
+    expect(realName('+52 ·········79')).toBeNull();
+    expect(realName('  ')).toBeNull();
+    expect(realName('✨')).toBeNull();
+    expect(realName('𝑨𝒏𝒈𝒆𝒍𝒂✨')).toBe('𝑨𝒏𝒈𝒆𝒍𝒂✨');
+    expect(realName(' Ángel Ponce ')).toBe('Ángel Ponce');
+  });
+
+  it('separa con nombre y celular, sin número y sin nombre', () => {
+    const s = new StatsAggregator();
+    s.addHistoryBatch({
+      contacts: [
+        { id: '56911110000@s.whatsapp.net', name: 'Con Todo' },
+        { id: '56922220000@s.whatsapp.net', notify: '+56 ·······00' },
+        { id: '777777777777@lid', name: 'Solo LID' },
+      ],
+      chats: [{ id: '56933330000@s.whatsapp.net' }],
+      messages: [],
+    });
+    const c = StatsAggregator.classify(s.directory());
+    expect(c.useful.map((p) => p.displayName)).toEqual(['Con Todo']);
+    expect(c).toMatchObject({ total: 4, noPhone: 1, noName: 2 });
+
+    // si después aparece su número, el de solo LID pasa a ser útil
+    s.addLidMapping({ lid: '777777777777@lid', pn: '56944440000@s.whatsapp.net' });
+    const again = StatsAggregator.classify(s.directory());
+    expect(again.useful.map((p) => p.phone).sort()).toEqual(['56911110000', '56944440000']);
+    expect(again.noPhone).toBe(0);
+  });
+
+  it('aprende el número del autor en mensajes de grupo (participantAlt)', () => {
+    const s = new StatsAggregator();
+    s.addMessages([
+      {
+        key: {
+          id: 'g1',
+          remoteJid: '120363000000000002@g.us',
+          participant: '888888888888@lid',
+          participantAlt: '56955550000@s.whatsapp.net',
+        },
+        message: { conversation: 'x' },
+        messageTimestamp: 1_760_000_000,
+      },
+    ]);
+    expect(s.summary().lidMappings).toBe(1);
+  });
+});
+
 describe('Excel de contactos', () => {
   it('trae hojas Contactos, Grupos y Resumen con teléfonos en formato +56', async () => {
     const s = new StatsAggregator();
@@ -138,6 +188,20 @@ describe('Excel de contactos', () => {
     // nadie sale sin nombre y los que no están guardados igual tienen su nombre de WhatsApp
     expect(dir.people.some((p) => p.inAddressBook === false && p.pushName)).toBe(true);
     expect(wb.getWorksheet('Grupos')!.rowCount - 1).toBe(dir.groups.length);
+
+    // útil: solo con nombre y celular, sin grupos ni IDs
+    const util = new ExcelJS.Workbook();
+    await util.xlsx.load(
+      (await buildContactsWorkbook({
+        session: summaryOf(s),
+        directory: dir,
+        mode: 'util',
+      })) as never,
+    );
+    expect(util.worksheets.map((w) => w.name)).toEqual(['Contactos', 'Resumen']);
+    const u = util.getWorksheet('Contactos')!;
+    expect(u.rowCount - 1).toBe(StatsAggregator.classify(dir).useful.length);
+    expect(u.getRow(1).values).not.toContain('ID de WhatsApp');
   });
 
   it('muestra las fechas en hora de Chile', () => {
@@ -153,6 +217,9 @@ describe('Excel de contactos', () => {
     const s = summaryOf(new StatsAggregator());
     expect(contactsFileName(s, Date.UTC(2026, 9, 7, 15))).toBe(
       'contactos-barberia-don-pepe-2026-10-07.xlsx',
+    );
+    expect(contactsFileName(s, Date.UTC(2026, 9, 7, 15), 'util')).toBe(
+      'contactos-util-barberia-don-pepe-2026-10-07.xlsx',
     );
     expect(contactsFileName({ ...s, label: null, profile: null, stats: emptyStats() })).toMatch(
       /^contactos-whatsapp-\d{4}-\d{2}-\d{2}\.xlsx$/,
