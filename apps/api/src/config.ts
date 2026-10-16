@@ -62,6 +62,12 @@ const EnvSchema = z.object({
     .pipe(z.string().regex(/^\d{8,15}$/, 'OWNER_PHONE debe ser un número con código de país'))
     .optional(),
 
+  /**
+   * Permite que el dueño envíe mensajes de texto desde su número (vía la API / Claude),
+   * con límites por minuto/hora/día. Solo aplica si también está OWNER_PHONE.
+   */
+  ALLOW_SEND: bool.default(false),
+
   /** solo desarrollo local: acciones de una lista cerrada pedidas por archivo (ver src/dev) */
   DEV_RUNNER: bool.default(false),
 });

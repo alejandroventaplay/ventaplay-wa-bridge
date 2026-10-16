@@ -29,6 +29,18 @@ const IdParams = z.object({ id: z.string().uuid() });
 const JID = z.string().regex(/^[\w.-]{3,64}@(s\.whatsapp\.net|lid|g\.us)$/, 'chat inválido');
 const ChatParams = IdParams.extend({ jid: JID });
 const MediaParams = ChatParams.extend({ msgId: z.string().regex(/^[\w-]{4,128}$/) });
+const ChatsQuery = z.object({ days: z.coerce.number().int().min(1).max(90).optional() });
+const MessagesQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(300).optional(),
+  before: z.coerce.number().int().positive().optional(),
+});
+const SearchQuery = z.object({
+  q: z.string().trim().min(1).max(200),
+  days: z.coerce.number().int().min(1).max(90).optional(),
+  jid: JID.optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+const SendBody = z.object({ text: z.string().min(1).max(4096) });
 const ExportQuery = z.object({ modo: z.enum(['util', 'completo']).default('util') });
 const CreateBody = z.object({ label: z.string().trim().max(80).nullish() }).nullish();
 const HEARTBEAT_MS = 20_000;
@@ -79,6 +91,8 @@ export async function buildServer(deps: ServerDeps) {
     storage: deps.storageKind,
     auth: auth.mode,
     readOnly: true,
+    /** el dueño puede enviar texto desde su número (con límites); todo lo demás sigue bloqueado */
+    sendEnabled: config.ALLOW_SEND && Boolean(config.OWNER_PHONE),
   }));
 
   // ----------------------------------------------------------- protegidas
@@ -155,15 +169,36 @@ export async function buildServer(deps: ServerDeps) {
     /** chats con actividad en los últimos 30 días (individuales y grupos) */
     api.get('/sessions/:id/personal/chats', async (req, reply) => {
       const { id } = IdParams.parse(req.params);
+      const { days } = ChatsQuery.parse(req.query);
       reply.header('cache-control', 'no-store');
-      return manager.get(id).personalChats();
+      return manager.get(id).personalChats({ days });
     });
 
     /** últimos mensajes guardados de un chat */
     api.get('/sessions/:id/personal/chats/:jid/messages', async (req, reply) => {
       const { id, jid } = ChatParams.parse(req.params);
+      const q = MessagesQuery.parse(req.query);
       reply.header('cache-control', 'no-store');
-      return manager.get(id).personalMessages(jid);
+      return manager.get(id).personalMessages(jid, q);
+    });
+
+    /** busca texto en todos los chats guardados (90 días) */
+    api.get('/sessions/:id/personal/search', async (req, reply) => {
+      const { id } = IdParams.parse(req.params);
+      const { q, days, jid, limit } = SearchQuery.parse(req.query);
+      reply.header('cache-control', 'no-store');
+      return manager.get(id).searchPersonal(q, { days, chatJid: jid ?? null, limit });
+    });
+
+    /** envía un texto desde el número del dueño (ALLOW_SEND, con límites) */
+    api.post('/sessions/:id/personal/chats/:jid/send', async (req) => {
+      const { id, jid } = ChatParams.parse(req.params);
+      const { text } = SendBody.parse(req.body ?? {});
+      req.log.info(
+        { session: id, chat: jid, by: req.principal?.email ?? req.principal?.sub },
+        'envío pedido por el dueño',
+      );
+      return manager.get(id).sendPersonal(jid, text);
     });
 
     /** foto, audio, video, sticker o documento de un mensaje guardado */

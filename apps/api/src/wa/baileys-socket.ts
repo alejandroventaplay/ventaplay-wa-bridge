@@ -39,6 +39,8 @@ export interface BaileysFactoryOptions {
   browser?: 'chrome' | 'desktop';
   /** 'latest' = versión vigente de WA Web · 'bundled' = la de Baileys */
   version?: 'latest' | 'bundled';
+  /** expone sendText (solo texto) antes de cerrar el candado; lo demás sigue bloqueado */
+  allowSend?: boolean;
 }
 
 export function createBaileysFactory(opts: BaileysFactoryOptions = {}): SocketFactory {
@@ -67,7 +69,13 @@ export function createBaileysFactory(opts: BaileysFactoryOptions = {}): SocketFa
       ...(agent ? { agent, fetchAgent: agent } : {}),
     });
 
+    // Única puerta de salida: guardamos el envío original ANTES del candado y solo
+    // exponemos texto plano. La sesión decide quién y cuánto puede enviar.
+    const original = opts.allowSend ? sock.sendMessage : null;
     const blocked = enforceReadOnly(sock);
+    if (original) {
+      (sock as unknown as WaSocketLike).sendText = (jid, text) => original(jid, { text });
+    }
     logger.debug({ blocked: blocked.length }, 'candado de solo lectura aplicado');
     return sock as unknown as WaSocketLike;
   };

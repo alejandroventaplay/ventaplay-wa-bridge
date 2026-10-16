@@ -24,6 +24,8 @@ export interface SessionManagerOptions {
   ownerPhone?: string | null;
   /** descarga la media de un mensaje guardado (fotos, audios…) */
   downloadMedia?: MediaDownloader | null;
+  /** el dueño permite enviar desde su número (con límites) */
+  allowSend?: boolean;
 }
 
 /** Dueño de todas las sesiones vivas del proceso. */
@@ -134,6 +136,7 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
       wipeOnLogout: this.opts.wipeOnLogout,
       ownerPhone: this.opts.ownerPhone ?? null,
       downloadMedia: this.opts.downloadMedia ?? null,
+      allowSend: this.opts.allowSend ?? false,
     });
     session.on('update', (summary) => this.emit('update', summary));
     this.sessions.set(record.id, session);

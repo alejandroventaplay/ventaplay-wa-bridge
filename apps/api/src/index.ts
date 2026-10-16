@@ -65,6 +65,7 @@ async function main(): Promise<void> {
         proxyUrl: config.WA_PROXY_URL,
         browser: config.WA_BROWSER,
         version: config.WA_VERSION,
+        allowSend: config.ALLOW_SEND && Boolean(config.OWNER_PHONE),
       });
 
   const manager = new SessionManager({
@@ -74,6 +75,7 @@ async function main(): Promise<void> {
     maxSessions: config.MAX_SESSIONS,
     wipeOnLogout: config.WIPE_ON_LOGOUT,
     ownerPhone: config.OWNER_PHONE ?? null,
+    allowSend: config.ALLOW_SEND && Boolean(config.OWNER_PHONE),
     downloadMedia: simulator ? simulator.downloadMedia : createMediaDownloader(logger),
   });
   if (config.OWNER_PHONE)

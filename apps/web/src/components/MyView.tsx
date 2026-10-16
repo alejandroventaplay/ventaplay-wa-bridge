@@ -162,6 +162,7 @@ export function MyView({ session }: { session: SessionSummary }) {
               sessionId={id}
               chat={current}
               now={now}
+              sendEnabled={Boolean(session.personal?.sendEnabled)}
               onBack={() => setSelected(null)}
             />
           ) : (
@@ -309,11 +310,13 @@ function ChatPanel({
   sessionId,
   chat,
   now,
+  sendEnabled,
   onBack,
 }: {
   sessionId: string;
   chat: PersonalChat;
   now: number;
+  sendEnabled: boolean;
   onBack: () => void;
 }) {
   const [data, setData] = useState<PersonalChatMessages | null>(null);
@@ -408,7 +411,9 @@ function ChatPanel({
       <footer className="flex items-center gap-2 border-t border-line bg-[#f0f2f5] px-4 py-3 text-sm text-ink-soft">
         <Smile className="size-5 opacity-50" />
         <span className="flex-1 rounded-lg bg-white px-3 py-2 text-ink-soft/80">
-          Solo lectura · desde aquí no se envían mensajes
+          {chat.isGroup || !sendEnabled
+            ? 'Solo lectura · desde aquí no se envían mensajes'
+            : 'Para responder, pídeselo a Claude: te muestra el texto y espera tu OK'}
         </span>
       </footer>
     </>

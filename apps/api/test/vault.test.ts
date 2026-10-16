@@ -61,17 +61,33 @@ describe('extractContent', () => {
 });
 
 describe('MessageVault', () => {
-  it('guarda solo los últimos 10 por chat, sin duplicados', () => {
+  it('guarda solo los últimos VAULT_PER_CHAT por chat, sin duplicados', () => {
     const v = new MessageVault();
     const jid = '56911111111@s.whatsapp.net';
-    const all = Array.from({ length: 25 }, (_, i) =>
-      msg(jid, NOW - (25 - i) * 60_000, { conversation: `m${i}` }),
+    const total = VAULT_PER_CHAT + 15;
+    const all = Array.from({ length: total }, (_, i) =>
+      msg(jid, NOW - (total - i) * 60_000, { conversation: `m${i}` }),
     );
     v.add(all.slice(10));
-    v.add(all.slice(0, 15)); // llegan desordenados y repetidos
+    v.add(all.slice(0, 40)); // llegan desordenados y repetidos
     const list = v.get(jid);
     expect(list).toHaveLength(VAULT_PER_CHAT);
-    expect(list.map((m) => m.text)).toEqual(Array.from({ length: 10 }, (_, i) => `m${i + 15}`));
+    expect(list[0]?.text).toBe('m15');
+    expect(list.at(-1)?.text).toBe(`m${total - 1}`);
+  });
+
+  it('al guardar, solo los 10 más recientes conservan la miniatura', () => {
+    const v = new MessageVault();
+    const jid = '56977777777@s.whatsapp.net';
+    v.add(
+      Array.from({ length: 15 }, (_, i) =>
+        msg(jid, NOW - (15 - i) * 1000, { imageMessage: { jpegThumbnail: 'AAAA', mediaKey: 'k' } }),
+      ),
+    );
+    const saved = JSON.parse(v.takeDirty(NOW)[`${VAULT_KEY_PREFIX}${jid}`]!) as { raw: string }[];
+    expect(saved.slice(0, 5).every((m) => !m.raw.includes('jpegThumbnail'))).toBe(true);
+    expect(saved.slice(5).every((m) => m.raw.includes('jpegThumbnail'))).toBe(true);
+    expect(saved[0]!.raw).toContain('mediaKey');
   });
 
   it('marca borrados y ediciones', () => {

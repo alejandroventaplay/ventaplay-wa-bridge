@@ -14,7 +14,23 @@ export function Logo({ className = '' }: { className?: string }) {
   );
 }
 
-export function ReadOnlyBadge({ compact = false }: { compact?: boolean }) {
+export function ReadOnlyBadge({
+  compact = false,
+  sendEnabled = false,
+}: {
+  compact?: boolean;
+  sendEnabled?: boolean;
+}) {
+  if (sendEnabled)
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-800"
+        title="Lectura de todo. Envío de texto solo desde tu número, con tu confirmación y con límites"
+      >
+        <LockKeyhole className="size-3.5" aria-hidden />
+        {compact ? 'Envío con tu OK' : 'Lectura · envío solo con tu confirmación'}
+      </span>
+    );
   return (
     <span
       className="inline-flex items-center gap-1.5 rounded-full border border-turquesa/30 bg-turquesa-10 px-2.5 py-1 text-xs font-bold text-turquesa-140"
@@ -31,6 +47,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const email = state.phase === 'signed-in' ? state.email : null;
   const driver = state.phase === 'signed-in' ? state.health.driver : null;
   const authMode = state.phase === 'signed-in' ? state.health.auth : null;
+  const sendEnabled = state.phase === 'signed-in' && Boolean(state.health.sendEnabled);
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-20 border-b border-line/80 bg-white/85 backdrop-blur">
@@ -48,7 +65,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           )}
           <div className="ml-auto flex items-center gap-3">
             <span className="hidden md:inline-flex">
-              <ReadOnlyBadge compact />
+              <ReadOnlyBadge compact sendEnabled={sendEnabled} />
             </span>
             {email && (
               <span

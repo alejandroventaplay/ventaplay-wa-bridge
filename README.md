@@ -25,6 +25,23 @@ sesión muestra dos pestañas: **Mi vista** y **General** (la de siempre).
 - El contenido llega por el History Sync al vincular y luego en vivo. Si el número
   se vinculó antes de activar `OWNER_PHONE`, hay que volver a vincularlo una vez.
 
+## Claude como asistente de tu WhatsApp
+
+`apps/mcp` es un conector MCP (extensión `.mcpb` para la app de Claude) que llama al
+Bridge de tu Mac. Herramientas: `whatsapp_estado`, `whatsapp_listar_chats`,
+`whatsapp_leer_chat`, `whatsapp_buscar`, `whatsapp_pendientes` y `whatsapp_enviar`.
+
+- Se instala una vez con doble clic en `WhatsApp-Alejandro.mcpb`. Lee el token y el
+  puerto de `apps/api/.env`, así que no hay que pegar nada.
+- Para el asistente se guardan hasta **300 mensajes por chat de los últimos 90 días**
+  (cifrados). Mi vista sigue mostrando 30 días y 10 mensajes.
+- **Enviar** solo funciona con `ALLOW_SEND=true` y `OWNER_PHONE`. Es solo texto, solo a
+  chats que ya existen y con frenos: 8 por minuto, 40 por hora, 150 al día y unos
+  segundos entre mensajes al mismo chat. El log no guarda el texto. Claude siempre
+  muestra el destinatario y el texto y espera tu confirmación. El resto del candado
+  sigue cerrado: no marca leído, no cambia presencia, no toca grupos.
+- Regenerar el conector: `pnpm --filter @wa-bridge/mcp pack` → `apps/mcp/dist/whatsapp-alejandro.mcpb`.
+
 ## Sprint 1 — qué hay
 
 - QR con la marca de VentaPlay (logo al centro, corrección de errores alta) que se

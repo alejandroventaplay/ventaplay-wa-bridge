@@ -117,6 +117,15 @@ class SimSocket implements WaSocketLike {
     this.onEnd();
   }
 
+  async sendText(jid: string, text: string): Promise<unknown> {
+    if (!this.user) throw new Error('no conectado');
+    return {
+      key: { id: `SIMOUT${Date.now().toString(16).toUpperCase()}`, remoteJid: jid, fromMe: true },
+      message: { conversation: text },
+      messageTimestamp: Math.floor(Date.now() / 1000),
+    };
+  }
+
   async profilePictureUrl(): Promise<string | undefined> {
     return undefined;
   }

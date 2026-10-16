@@ -1,0 +1,66 @@
+{
+  "manifest_version": "0.3",
+  "name": "whatsapp-alejandro",
+  "display_name": "WhatsApp de Alejandro",
+  "version": "0.1.0",
+  "description": "Lee, busca y resume tu WhatsApp a través del VentaPlay WA Bridge de tu Mac. Enviar exige tu confirmación.",
+  "long_description": "Conecta a Claude con el WA Bridge que corre en tu Mac (http://localhost:4010). Herramientas: estado, listar chats, leer chat, buscar, pendientes por responder y enviar (solo con confirmación y con límites). Toma el token del archivo apps/api/.env del Bridge, no hay que pegar nada.",
+  "author": {
+    "name": "VentaPlay",
+    "email": "alejandro@ventaplay.com",
+    "url": "https://ventaplay.com"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"],
+      "env": {
+        "WA_BRIDGE_DIR": "${user_config.bridge_dir}"
+      }
+    }
+  },
+  "user_config": {
+    "bridge_dir": {
+      "type": "directory",
+      "title": "Carpeta del WA Bridge",
+      "description": "Donde está el proyecto (se lee apps/api/.env para el token y el puerto)",
+      "default": "${HOME}/ventaplay-wa-bridge",
+      "required": true
+    }
+  },
+  "tools": [
+    {
+      "name": "whatsapp_estado",
+      "description": "Estado de la conexión y de lo guardado"
+    },
+    {
+      "name": "whatsapp_listar_chats",
+      "description": "Chats recientes con su último mensaje"
+    },
+    {
+      "name": "whatsapp_leer_chat",
+      "description": "Mensajes de un chat (hasta 300, 90 días)"
+    },
+    {
+      "name": "whatsapp_buscar",
+      "description": "Busca texto en todos los chats"
+    },
+    {
+      "name": "whatsapp_pendientes",
+      "description": "Chats que esperan tu respuesta"
+    },
+    {
+      "name": "whatsapp_enviar",
+      "description": "Envía un texto (solo con confirmación)"
+    }
+  ],
+  "compatibility": {
+    "platforms": ["darwin"],
+    "runtimes": {
+      "node": ">=20.0.0"
+    }
+  },
+  "icon": "icon.png"
+}

@@ -2,16 +2,22 @@ import type { ChatMedia, MessageKind } from '@wa-bridge/shared';
 import { isGroupJid, isLidJid, isUserJid, type MessageLike, normalizeJid, toMs } from './stats.js';
 
 /**
- * Bóveda de mensajes para "Mi vista".
+ * Bóveda de mensajes del dueño ("Mi vista" y el asistente de Claude).
  *
  * Solo existe para el WhatsApp del dueño (OWNER_PHONE). Guarda los últimos
- * VAULT_PER_CHAT mensajes de cada chat; la vista muestra los chats con actividad en
- * los últimos VAULT_WINDOW_DAYS días. Todo se persiste cifrado (como las credenciales)
- * y se borra al desvincular. Nunca envía nada: solo lee lo que WhatsApp entrega.
+ * VAULT_PER_CHAT mensajes de cada chat con actividad en los últimos VAULT_WINDOW_DAYS
+ * días. Mi vista muestra menos (VIEW_*). Todo se persiste cifrado (como las
+ * credenciales) y se borra al desvincular.
  */
-export const VAULT_PER_CHAT = 10;
-export const VAULT_WINDOW_DAYS = 30;
+export const VAULT_PER_CHAT = 300;
+export const VAULT_WINDOW_DAYS = 90;
 export const VAULT_WINDOW_MS = VAULT_WINDOW_DAYS * 24 * 3600 * 1000;
+/** lo que muestra Mi vista por defecto */
+export const VIEW_PER_CHAT = 10;
+export const VIEW_WINDOW_DAYS = 30;
+export const VIEW_WINDOW_MS = VIEW_WINDOW_DAYS * 24 * 3600 * 1000;
+/** solo los mensajes más recientes de cada chat conservan su miniatura (pesa) */
+const THUMBS_PER_CHAT = 10;
 /** prefijo de las claves en el SessionStore (junto a las credenciales, se borra con ellas) */
 export const VAULT_KEY_PREFIX = 'vault:chat:';
 
@@ -356,8 +362,8 @@ export class MessageVault {
   }
 
   /** chats y mensajes dentro de la ventana */
-  counts(now = Date.now()): { chats: number; messages: number } {
-    const cutoff = now - VAULT_WINDOW_MS;
+  counts(now = Date.now(), windowMs = VAULT_WINDOW_MS): { chats: number; messages: number } {
+    const cutoff = now - windowMs;
     let chats = 0;
     let messages = 0;
     for (const list of this.chats.values()) {
@@ -381,10 +387,19 @@ export class MessageVault {
       const list = this.chats.get(jid);
       const active = list && (list[list.length - 1]?.ts ?? 0) >= cutoff;
       // en disco solo quedan los chats con actividad en la ventana
-      out[VAULT_KEY_PREFIX + jid] = active ? JSON.stringify(list) : null;
+      out[VAULT_KEY_PREFIX + jid] = active ? JSON.stringify(this.lighten(list)) : null;
     }
     this.dirty.clear();
     return out;
+  }
+
+  /** quita las miniaturas de los mensajes que ya no están entre los más recientes */
+  private lighten(list: StoredMessage[]): StoredMessage[] {
+    const keepFrom = list.length - THUMBS_PER_CHAT;
+    list.forEach((m, i) => {
+      if (i < keepFrom && m.raw && m.raw.includes('jpegThumbnail')) m.raw = stripThumbnails(m.raw);
+    });
+    return list;
   }
 
   /** vuelve a marcar como pendientes (si falló el guardado) */
@@ -405,5 +420,14 @@ export class MessageVault {
         /* un archivo dañado no bota el resto */
       }
     }
+  }
+}
+
+/** borra los campos jpegThumbnail de un mensaje serializado */
+export function stripThumbnails(raw: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw), (k, v) => (k === 'jpegThumbnail' ? undefined : v));
+  } catch {
+    return raw;
   }
 }

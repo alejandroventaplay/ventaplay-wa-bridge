@@ -19,7 +19,7 @@ afterEach(async () => {
   cleanups = [];
 });
 
-async function setup(ownerPhone: string | null) {
+async function setup(ownerPhone: string | null, opts: { allowSend?: boolean } = {}) {
   const config = loadConfig({ NODE_ENV: 'test', API_TOKEN: TOKEN, WA_DRIVER: 'simulator' });
   const t = await tempStore();
   const sim = createSimulator({
@@ -37,6 +37,7 @@ async function setup(ownerPhone: string | null) {
     wipeOnLogout: true,
     ownerPhone,
     downloadMedia: sim.downloadMedia,
+    allowSend: opts.allowSend ?? false,
   });
   await manager.init();
   const app = await buildServer({
@@ -83,7 +84,7 @@ describe('Mi vista', () => {
     const cutoff = Date.now() - 30 * 24 * 3600 * 1000;
     for (const c of list.items) {
       expect(c.lastMessageAt).toBeGreaterThanOrEqual(cutoff);
-      expect(c.stored).toBeLessThanOrEqual(10);
+      expect(c.stored).toBeLessThanOrEqual(300);
     }
     // ordenados del más reciente al más antiguo
     const ts = list.items.map((c) => c.lastMessageAt);
@@ -98,7 +99,8 @@ describe('Mi vista', () => {
     });
     expect(m.statusCode).toBe(200);
     const body = m.json() as PersonalChatMessages;
-    expect(body.messages.length).toBe(group.stored);
+    expect(body.messages.length).toBe(Math.min(group.stored, 10));
+    expect(body.hasMore).toBe(group.stored > 10);
     expect(body.messages.some((x) => !x.fromMe && x.senderName)).toBe(true);
   });
 
@@ -168,5 +170,83 @@ describe('Mi vista', () => {
       headers: auth,
     });
     expect(r.statusCode).toBe(400);
+  });
+
+  it('lee más mensajes con limit y busca texto en todos los chats', async () => {
+    const { app, id } = await setup('56912345678');
+    const list = (
+      await app.inject({ url: `/sessions/${id}/personal/chats?days=90`, headers: auth })
+    ).json() as PersonalChatList;
+    const big = [...list.items].sort((a, b) => b.stored - a.stored)[0]!;
+    const r = await app.inject({
+      url: `/sessions/${id}/personal/chats/${encodeURIComponent(big.jid)}/messages?limit=300`,
+      headers: auth,
+    });
+    expect((r.json() as PersonalChatMessages).messages.length).toBe(big.stored);
+
+    const s = await app.inject({
+      url: `/sessions/${id}/personal/search?q=${encodeURIComponent('cuanto sale')}`,
+      headers: auth,
+    });
+    expect(s.statusCode).toBe(200);
+    const res = s.json() as { total: number; hits: { message: { text: string } }[] };
+    expect(res.total).toBeGreaterThan(0);
+    expect(res.hits.every((h) => /cuánto sale/i.test(h.message.text))).toBe(true);
+  });
+
+  it('sin ALLOW_SEND no envía', async () => {
+    const { app, id } = await setup('56912345678');
+    const c = (
+      (
+        await app.inject({ url: `/sessions/${id}/personal/chats`, headers: auth })
+      ).json() as PersonalChatList
+    ).items[0]!;
+    const r = await app.inject({
+      method: 'POST',
+      url: `/sessions/${id}/personal/chats/${encodeURIComponent(c.jid)}/send`,
+      headers: auth,
+      payload: { text: 'hola' },
+    });
+    expect(r.statusCode).toBe(403);
+    expect(r.json().error).toBe('send_disabled');
+  });
+
+  it('con ALLOW_SEND envía a un chat existente, lo guarda y aplica el freno', async () => {
+    const { app, id } = await setup('56912345678', { allowSend: true });
+    const c = (
+      (
+        await app.inject({ url: `/sessions/${id}/personal/chats`, headers: auth })
+      ).json() as PersonalChatList
+    ).items[0]!;
+    const send = (text: string) =>
+      app.inject({
+        method: 'POST',
+        url: `/sessions/${id}/personal/chats/${encodeURIComponent(c.jid)}/send`,
+        headers: auth,
+        payload: { text },
+      });
+    const r = await send('Hola, te confirmo mañana');
+    expect(r.statusCode).toBe(200);
+    expect(r.json().message).toMatchObject({ fromMe: true, text: 'Hola, te confirmo mañana' });
+    const last = (
+      (
+        await app.inject({
+          url: `/sessions/${id}/personal/chats/${encodeURIComponent(c.jid)}/messages`,
+          headers: auth,
+        })
+      ).json() as PersonalChatMessages
+    ).messages.at(-1);
+    expect(last?.text).toBe('Hola, te confirmo mañana');
+    // mismo chat al tiro: freno
+    expect((await send('otro')).statusCode).toBe(429);
+
+    // a un chat que no existe: no
+    const nope = await app.inject({
+      method: 'POST',
+      url: `/sessions/${id}/personal/chats/56900000001@s.whatsapp.net/send`,
+      headers: auth,
+      payload: { text: 'hola' },
+    });
+    expect(nope.statusCode).toBe(404);
   });
 });

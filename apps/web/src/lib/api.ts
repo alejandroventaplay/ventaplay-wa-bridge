@@ -14,6 +14,8 @@ export interface Health {
   storage: 'file' | 'postgres';
   auth: 'supabase' | 'token' | 'supabase+token' | 'none';
   readOnly: true;
+  /** el dueño puede enviar texto (con confirmación y límites) */
+  sendEnabled?: boolean;
 }
 
 export interface ExportPreview {

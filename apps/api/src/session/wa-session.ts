@@ -4,6 +4,9 @@ import type { Logger } from 'pino';
 import QRCode from 'qrcode';
 import type {
   ChatMessage,
+  SearchHit,
+  SearchResult,
+  SendResult,
   PersonalChat,
   PersonalChatList,
   PersonalChatMessages,
@@ -24,8 +27,11 @@ import {
   VAULT_KEY_PREFIX,
   VAULT_PER_CHAT,
   VAULT_WINDOW_DAYS,
-  VAULT_WINDOW_MS,
+  VIEW_PER_CHAT,
+  VIEW_WINDOW_DAYS,
+  VIEW_WINDOW_MS,
 } from './message-vault.js';
+import { SendLimiter } from './send-limiter.js';
 import { type Directory, isGroupJid, normalizeJid, phoneOf, StatsAggregator } from './stats.js';
 
 /** WhatsApp muestra el primer QR ~60 s y los siguientes ~20 s */
@@ -58,6 +64,8 @@ export interface WaSessionDeps {
   /** número (solo dígitos) del dueño; solo ese WhatsApp guarda mensajes */
   ownerPhone?: string | null;
   downloadMedia?: MediaDownloader | null;
+  /** el dueño permite enviar mensajes desde su número (con límites) */
+  allowSend?: boolean;
 }
 
 export interface WaSessionEvents {
@@ -82,6 +90,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   private vaultLoaded = false;
   private mediaCache = new Map<string, { buffer: Buffer; mimetype: string; thumbnail: boolean }>();
   private mediaCacheBytes = 0;
+  private sendLimiter = new SendLimiter();
 
   private sock: WaSocketLike | null = null;
   private auth: StoredAuthState | null = null;
@@ -198,7 +207,16 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   private personalInfo(): PersonalVaultInfo | null {
     // desvinculado: los mensajes se borraron junto con las credenciales
     if (!this.record.linked || this.ownerState() !== 'yes') return null;
-    return { ...this.vault.counts(), windowDays: VAULT_WINDOW_DAYS, perChat: VAULT_PER_CHAT };
+    const view = this.vault.counts(Date.now(), VIEW_WINDOW_MS);
+    return {
+      chats: view.chats,
+      messages: this.vault.counts().messages,
+      windowDays: VIEW_WINDOW_DAYS,
+      perChat: VIEW_PER_CHAT,
+      storeDays: VAULT_WINDOW_DAYS,
+      storePerChat: VAULT_PER_CHAT,
+      sendEnabled: Boolean(this.deps.allowSend),
+    };
   }
 
   private requireOwner(): void {
@@ -341,9 +359,10 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   }
 
   /** chats de "Mi vista": con actividad en la ventana, del más reciente al más antiguo */
-  async personalChats(now = Date.now()): Promise<PersonalChatList> {
+  async personalChats(opts: { days?: number } = {}, now = Date.now()): Promise<PersonalChatList> {
     this.requireOwner();
-    const cutoff = now - VAULT_WINDOW_MS;
+    const days = clamp(opts.days ?? VIEW_WINDOW_DAYS, 1, VAULT_WINDOW_DAYS);
+    const cutoff = now - days * 86_400_000;
     const names = await this.names();
     const items: PersonalChat[] = [];
     for (const [jid, v] of this.mergedVault()) {
@@ -361,36 +380,151 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       individual: items.length - groups,
       chats: items.length,
       messages,
-      windowDays: VAULT_WINDOW_DAYS,
-      perChat: VAULT_PER_CHAT,
+      windowDays: days,
+      perChat: VIEW_PER_CHAT,
+      storeDays: VAULT_WINDOW_DAYS,
+      storePerChat: VAULT_PER_CHAT,
+      sendEnabled: Boolean(this.deps.allowSend),
     };
   }
 
   /** últimos mensajes de un chat (de más antiguo a más nuevo) */
-  async personalMessages(chatJid: string): Promise<PersonalChatMessages> {
+  async personalMessages(
+    chatJid: string,
+    opts: { limit?: number; before?: number } = {},
+  ): Promise<PersonalChatMessages> {
     this.requireOwner();
     const key = this.stats.canonicalJid(chatJid);
     const v = this.mergedVault().get(key);
     if (!v?.messages.length) throw new HttpError(404, 'chat_not_found', 'Chat no encontrado');
     const names = await this.names();
-    const group = isGroupJid(key);
-    const messages: ChatMessage[] = v.messages.map((m) => {
-      const sender = m.sender ? this.stats.canonicalJid(m.sender) : null;
-      return {
-        id: m.id,
-        fromMe: m.fromMe,
-        timestamp: m.ts,
-        kind: m.kind,
-        text: m.text,
-        senderJid: group ? sender : null,
-        senderName: group ? this.senderName(m, names) : null,
-        senderPhone: group ? (phoneOf(sender) ?? phoneOf(m.senderAlt ?? null)) : null,
-        media: m.media,
-        location: m.location ?? null,
-        ...(m.edited ? { edited: true } : {}),
-      };
+    const limit = clamp(opts.limit ?? VIEW_PER_CHAT, 1, VAULT_PER_CHAT);
+    const pool = opts.before ? v.messages.filter((m) => m.ts < opts.before!) : v.messages;
+    const page = pool.slice(-limit);
+    return {
+      chat: this.toChat(key, v.messages, names),
+      messages: page.map((m) => this.toMessage(key, m, names)),
+      hasMore: pool.length > page.length,
+    };
+  }
+
+  private toMessage(
+    chatKey: string,
+    m: StoredMessage,
+    names: Awaited<ReturnType<WaSession['names']>>,
+  ): ChatMessage {
+    const group = isGroupJid(chatKey);
+    const sender = m.sender ? this.stats.canonicalJid(m.sender) : null;
+    return {
+      id: m.id,
+      fromMe: m.fromMe,
+      timestamp: m.ts,
+      kind: m.kind,
+      text: m.text,
+      senderJid: group ? sender : null,
+      senderName: group ? this.senderName(m, names) : null,
+      senderPhone: group ? (phoneOf(sender) ?? phoneOf(m.senderAlt ?? null)) : null,
+      media: m.media,
+      location: m.location ?? null,
+      ...(m.edited ? { edited: true } : {}),
+    };
+  }
+
+  /**
+   * Busca texto en los mensajes guardados (sin distinguir mayúsculas ni tildes;
+   * todas las palabras deben aparecer). Del más nuevo al más antiguo.
+   */
+  async searchPersonal(
+    query: string,
+    opts: { days?: number; chatJid?: string | null; limit?: number } = {},
+    now = Date.now(),
+  ): Promise<SearchResult> {
+    this.requireOwner();
+    const terms = fold(query).split(/\s+/).filter(Boolean);
+    if (!terms.length) throw new HttpError(400, 'bad_request', 'Escribe algo para buscar');
+    const days = clamp(opts.days ?? VAULT_WINDOW_DAYS, 1, VAULT_WINDOW_DAYS);
+    const limit = clamp(opts.limit ?? 50, 1, 200);
+    const cutoff = now - days * 86_400_000;
+    const only = opts.chatJid ? this.stats.canonicalJid(opts.chatJid) : null;
+    const names = await this.names();
+    const found: { key: string; msgs: StoredMessage[]; m: StoredMessage }[] = [];
+    for (const [key, v] of this.mergedVault()) {
+      if (only && key !== only) continue;
+      for (const m of v.messages) {
+        if (m.ts < cutoff) continue;
+        const hay = fold(`${m.text ?? ''} ${m.media?.fileName ?? ''}`);
+        if (terms.every((t) => hay.includes(t))) found.push({ key, msgs: v.messages, m });
+      }
+    }
+    found.sort((a, b) => b.m.ts - a.m.ts);
+    const chats = new Map<string, SearchHit['chat']>();
+    const hits: SearchHit[] = found.slice(0, limit).map(({ key, msgs, m }) => {
+      let chat = chats.get(key);
+      if (!chat) {
+        const c = this.toChat(key, msgs, names);
+        chat = { jid: c.jid, name: c.name, isGroup: c.isGroup, phone: c.phone };
+        chats.set(key, chat);
+      }
+      return { chat, message: this.toMessage(key, m, names) };
     });
-    return { chat: this.toChat(key, v.messages, names), messages };
+    return { query, days, total: found.length, hits };
+  }
+
+  /**
+   * Envía un texto desde el número del dueño. Solo con ALLOW_SEND, solo a chats que
+   * ya existen en la bóveda y con límites por minuto/hora/día. El log no guarda el texto.
+   */
+  async sendPersonal(chatJid: string, text: string, now = Date.now()): Promise<SendResult> {
+    this.requireOwner();
+    if (!this.deps.allowSend)
+      throw new HttpError(403, 'send_disabled', 'El envío no está habilitado (ALLOW_SEND)');
+    const body = text.trim();
+    if (!body) throw new HttpError(400, 'bad_request', 'El mensaje está vacío');
+    if (body.length > 4096)
+      throw new HttpError(400, 'bad_request', 'El mensaje es muy largo (máx. 4096)');
+    const key = this.stats.canonicalJid(chatJid);
+    const v = this.mergedVault().get(key);
+    if (!v?.messages.length)
+      throw new HttpError(
+        404,
+        'chat_not_found',
+        'Solo se puede escribir a chats con conversación en los últimos 90 días',
+      );
+    const sock = this.sock;
+    if (!sock?.sendText || this.record.status !== 'connected')
+      throw new HttpError(409, 'not_connected', 'WhatsApp no está conectado ahora');
+    const wait = this.sendLimiter.check(key, now);
+    if (wait) throw new HttpError(429, 'rate_limited', wait);
+
+    this.sendLimiter.record(key, now);
+    let sent: unknown;
+    try {
+      sent = await withTimeout(sock.sendText(key, body), 20_000);
+    } catch (err) {
+      this.log.warn({ chat: key, err: errorMessage(err) }, 'no se pudo enviar el mensaje');
+      throw new HttpError(502, 'send_failed', `WhatsApp no aceptó el envío: ${errorMessage(err)}`);
+    }
+    this.log.info({ chat: key, chars: body.length }, 'mensaje enviado por el dueño');
+    const fallback = {
+      key: { id: `OUT${now}`, remoteJid: key, fromMe: true },
+      message: { conversation: body },
+      messageTimestamp: Math.floor(now / 1000),
+    };
+    const msg = (sent && typeof sent === 'object' && 'key' in sent ? sent : fallback) as Parameters<
+      MessageVault['add']
+    >[0][number];
+    this.vault.add([msg]);
+    this.scheduleVaultPersist();
+    this.touch();
+    const names = await this.names();
+    const list = this.mergedVault().get(key)?.messages ?? [];
+    const stored = list.find((m) => m.id === msg.key?.id) ?? list[list.length - 1]!;
+    const c = this.toChat(key, list, names);
+    return {
+      chat: { jid: c.jid, name: c.name, isGroup: c.isGroup, phone: c.phone },
+      message: this.toMessage(key, stored, names),
+      remaining: this.sendLimiter.remaining(now),
+    };
   }
 
   /** media de un mensaje guardado; si ya no se puede bajar, su miniatura */
@@ -965,3 +1099,13 @@ function prettyPhone(phone: string): string {
   if (d.length === 11 && d.startsWith('569')) return `+56 9 ${d.slice(3, 7)} ${d.slice(7)}`;
   return `+${d}`;
 }
+
+const clamp = (n: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, Number.isFinite(n) ? Math.round(n) : min));
+
+/** minúsculas y sin tildes, para buscar */
+const fold = (s: string) =>
+  s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '');

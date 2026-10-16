@@ -136,8 +136,13 @@ export interface PersonalVaultInfo {
   messages: number;
   /** ventana de días que se muestra */
   windowDays: number;
-  /** máximo de mensajes guardados por chat */
+  /** máximo de mensajes que muestra Mi vista por chat */
   perChat: number;
+  /** días y mensajes por chat que se guardan (para búsquedas y el asistente) */
+  storeDays?: number;
+  storePerChat?: number;
+  /** el dueño habilitó el envío (ALLOW_SEND): solo con confirmación y con límites */
+  sendEnabled?: boolean;
 }
 
 export type MessageKind =
@@ -196,7 +201,7 @@ export interface PersonalChat {
   previewKind: MessageKind;
   previewFromMe: boolean;
   previewSender: string | null;
-  /** mensajes guardados (máx. perChat) */
+  /** mensajes guardados del chat (máx. storePerChat) */
   stored: number;
 }
 
@@ -209,6 +214,27 @@ export interface PersonalChatList extends PersonalVaultInfo {
 export interface PersonalChatMessages {
   chat: PersonalChat;
   messages: ChatMessage[];
+  /** hay mensajes guardados más antiguos que los devueltos */
+  hasMore: boolean;
+}
+
+export interface SearchHit {
+  chat: Pick<PersonalChat, 'jid' | 'name' | 'isGroup' | 'phone'>;
+  message: ChatMessage;
+}
+
+export interface SearchResult {
+  query: string;
+  days: number;
+  total: number;
+  hits: SearchHit[];
+}
+
+export interface SendResult {
+  chat: Pick<PersonalChat, 'jid' | 'name' | 'isGroup' | 'phone'>;
+  message: ChatMessage;
+  /** envíos que quedan en la hora / el día */
+  remaining: { hour: number; day: number };
 }
 
 export interface CreateSessionBody {

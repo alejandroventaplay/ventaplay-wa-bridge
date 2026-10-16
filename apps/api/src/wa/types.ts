@@ -23,6 +23,11 @@ export interface WaSocketLike {
     timeoutMs?: number,
   ): Promise<string | undefined>;
   getBusinessProfile(jid: string): Promise<WABusinessProfile | void>;
+  /**
+   * Solo existe si el dueño habilitó el envío (ALLOW_SEND). Manda un texto y devuelve
+   * el mensaje enviado. Todo lo demás del socket sigue bloqueado por el candado.
+   */
+  sendText?(jid: string, text: string): Promise<unknown>;
 }
 
 export interface SocketFactoryOptions {
