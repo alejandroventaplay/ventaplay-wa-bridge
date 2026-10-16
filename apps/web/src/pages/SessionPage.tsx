@@ -1,7 +1,8 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   ArrowLeft,
+  FolderKanban,
   LayoutDashboard,
   MessagesSquare,
   RefreshCw,
@@ -10,7 +11,7 @@ import {
   Unplug,
   WifiOff,
 } from 'lucide-react';
-import type { SessionSummary } from '@wa-bridge/shared';
+import type { ProjectInfo, SessionSummary } from '@wa-bridge/shared';
 import { useAuth } from '../hooks/auth';
 import { useSessionStream } from '../hooks/streams';
 import { api } from '../lib/api';
@@ -18,6 +19,7 @@ import { AppShell, Dialog, Spinner, StatusBadge } from '../components/ui';
 import { Dashboard } from '../components/Dashboard';
 import { LinkView } from '../components/LinkView';
 import { MyView } from '../components/MyView';
+import { ProjectView } from '../components/ProjectView';
 
 type Confirm = 'logout' | 'delete' | null;
 
@@ -31,6 +33,21 @@ export function SessionPage() {
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [error, setError] = useState<string | null>(null);
   const [params, setParams] = useSearchParams();
+  const [projects, setProjects] = useState<ProjectInfo[]>([]);
+  const owner = Boolean(session?.personal);
+
+  // proyectos (chats aislados): pestañas al lado de General
+  useEffect(() => {
+    if (!id || !owner) return;
+    let alive = true;
+    api
+      .projects(id)
+      .then((p) => alive && setProjects(p))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [id, owner]);
 
   async function run(fn: () => Promise<SessionSummary | void>) {
     setBusy(true);
@@ -69,9 +86,16 @@ export function SessionPage() {
   }
 
   // "Mi vista" solo existe para el WhatsApp del dueño; por defecto se abre ahí
-  const tab: 'general' | 'mia' =
-    session.personal && params.get('vista') !== 'general' ? 'mia' : 'general';
-  const setTab = (t: 'general' | 'mia') =>
+  const vista = params.get('vista') ?? '';
+  const projectTab = vista.startsWith('p:') && projects.some((p) => p.jid === vista.slice(2));
+  const tab: Tab = !session.personal
+    ? 'general'
+    : projectTab
+      ? (vista as Tab)
+      : vista === 'general'
+        ? 'general'
+        : 'mia';
+  const setTab = (t: Tab) =>
     setParams(
       (p) => {
         p.set('vista', t);
@@ -116,9 +140,19 @@ export function SessionPage() {
             busy={busy}
             onReconnect={() => void run(() => api.connect(id))}
           />
-          {session.personal && <Tabs tab={tab} onChange={setTab} />}
-          {tab === 'mia' ? (
-            <MyView session={session} />
+          {session.personal && <Tabs tab={tab} onChange={setTab} projects={projects} />}
+          {tab.startsWith('p:') ? (
+            <ProjectView key={tab} session={session} jid={tab.slice(2)} />
+          ) : tab === 'mia' ? (
+            <MyView
+              session={session}
+              projects={projects.map((p) => p.jid)}
+              onIsolate={async (jid) => {
+                const p = await api.isolate(id, jid);
+                setProjects((cur) => [...cur.filter((x) => x.jid !== p.jid), p]);
+                setTab(`p:${p.jid}`);
+              }}
+            />
           ) : (
             <Dashboard session={session} onDisconnect={() => setConfirm('logout')} />
           )}
@@ -242,32 +276,41 @@ function StatusNotice({
   return null;
 }
 
+type Tab = 'general' | 'mia' | `p:${string}`;
+
 function Tabs({
   tab,
   onChange,
+  projects,
 }: {
-  tab: 'general' | 'mia';
-  onChange: (t: 'general' | 'mia') => void;
+  tab: Tab;
+  onChange: (t: Tab) => void;
+  projects: ProjectInfo[];
 }) {
-  const item = (key: 'general' | 'mia', label: string, icon: ReactNode) => (
+  const item = (key: Tab, label: string, icon: ReactNode) => (
     <button
+      key={key}
+      title={label}
       role="tab"
       aria-selected={tab === key}
       onClick={() => onChange(key)}
-      className={`-mb-px inline-flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-bold transition ${
+      className={`-mb-px inline-flex max-w-[260px] shrink-0 items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-bold transition ${
         tab === key
           ? 'border-violeta text-violeta'
           : 'border-transparent text-ink-soft hover:text-ink'
       }`}
     >
       {icon}
-      {label}
+      <span className="truncate">{label}</span>
     </button>
   );
   return (
-    <div role="tablist" className="mb-5 flex gap-1 border-b border-line">
+    <div role="tablist" className="mb-5 flex gap-1 overflow-x-auto border-b border-line">
       {item('mia', 'Mi vista', <MessagesSquare className="size-4" />)}
       {item('general', 'General', <LayoutDashboard className="size-4" />)}
+      {projects.map((p) =>
+        item(`p:${p.jid}`, p.name, <FolderKanban className="size-4 shrink-0 text-turquesa-140" />),
+      )}
     </div>
   );
 }

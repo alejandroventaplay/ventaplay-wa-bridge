@@ -46,6 +46,29 @@ Bridge de tu Mac. Herramientas: `whatsapp_estado`, `whatsapp_listar_chats`,
   para adjuntar, pegar o arrastrar un archivo, y opción de mandar una foto como documento.
 - Regenerar el conector: `pnpm --filter @wa-bridge/mcp pack` → `apps/mcp/dist/whatsapp-alejandro.mcpb`.
 
+## Proyectos: chats aislados para analizar
+
+Desde **Mi vista** → un chat → **Aislar como proyecto**. Desde ese momento se guarda
+**todo** lo de ese chat (sin el tope de 300 / 90 días): cada mensaje con su autor
+(número, LID, nombre), tipo, texto, a qué responde, menciones, reenvíos, ediciones con
+el texto anterior, borrados (sin perder lo que decía), reacciones, recibos de lectura y
+el mensaje original de WhatsApp. La media se baja sola (HTTPS al CDN), se verifica su
+hash y se guarda cifrada.
+
+Cada proyecto tiene su pestaña al lado de **General** y una carpeta que se reescribe
+sola tras cada cambio, lista para analizar:
+
+```
+apps/api/data/proyectos/<nombre>/
+  proyecto.json    resumen + participantes
+  mensajes.jsonl   un mensaje por línea, con todos los datos y el original
+  mensajes.xlsx    Mensajes · Participantes · Resumen
+  media/           fecha_id_nombre-original.ext
+```
+
+(`PROJECTS_DIR` cambia la carpeta.) Lo guardado en el Bridge se borra al desvincular,
+como la bóveda; la carpeta exportada queda.
+
 ## Sprint 1 — qué hay
 
 - QR con la marca de VentaPlay (logo al centro, corrección de errores alta) que se

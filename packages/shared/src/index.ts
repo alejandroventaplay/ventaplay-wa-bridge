@@ -266,3 +266,89 @@ export const emptyStats = (): SyncStats => ({
   lidMappings: 0,
   topChats: [],
 });
+
+// ------------------------------------------------------------------ proyectos (grupos aislados)
+
+/**
+ * Un chat "aislado" del dueño: se guarda TODO (sin tope ni ventana), con cada metadato
+ * y la media descargada, para analizarlo después.
+ */
+export interface ProjectInfo {
+  jid: string;
+  name: string;
+  isGroup: boolean;
+  /** cuándo se aisló (epoch ms) */
+  since: number;
+  messages: number;
+  participants: number;
+  first: number | null;
+  last: number | null;
+  /** cuántos mensajes por tipo */
+  kinds: Partial<Record<MessageKind, number>>;
+  media: { total: number; downloaded: number; failed: number; bytes: number };
+  /** carpeta del equipo donde se exporta (JSONL, Excel y archivos) */
+  exportDir: string | null;
+  exportedAt: number | null;
+}
+
+export interface ProjectPerson {
+  jid: string | null;
+  lid: string | null;
+  phone: string | null;
+  /** nombre de la agenda o, si no hay, el que la persona usa en WhatsApp */
+  name: string | null;
+  pushName: string | null;
+}
+
+/** Un mensaje del archivo con todos sus datos y metadatos. */
+export interface ArchivedMessage {
+  id: string;
+  chatJid: string;
+  /** epoch ms (UTC) */
+  timestamp: number;
+  fromMe: boolean;
+  sender: ProjectPerson;
+  /** tipo de mensaje de WhatsApp tal cual (imageMessage, extendedTextMessage, …) */
+  type: string | null;
+  kind: MessageKind;
+  /** texto o pie de foto/documento */
+  text: string | null;
+  quoted: { id: string; participant: string | null; text: string | null } | null;
+  mentions: string[];
+  forwarded: boolean;
+  forwardingScore: number | null;
+  /** mensaje temporal: segundos de expiración */
+  ephemeralSeconds: number | null;
+  media:
+    | (ChatMedia & {
+        sha256: string | null;
+        pageCount: number | null;
+        /** se bajó y se guardó cifrado en el equipo */
+        downloaded: boolean;
+        /** el hash del archivo bajado coincide con el de WhatsApp */
+        verified: boolean | null;
+        downloadedAt: number | null;
+        error: string | null;
+      })
+    | null;
+  location: { lat: number; lng: number; name?: string | null } | null;
+  /** versiones anteriores del texto (la última edición queda en `text`) */
+  edits: { timestamp: number; previousText: string | null }[];
+  deleted: { timestamp: number } | null;
+  /** última reacción de cada persona */
+  reactions: { sender: string; emoji: string; timestamp: number }[];
+  /** recibos de entrega/lectura (solo de tus mensajes) */
+  receipts: { jid: string; delivered: number | null; read: number | null; played: number | null }[];
+  /** de dónde salió: historial al vincular, en vivo, enviado desde aquí o la bóveda previa */
+  source: 'history' | 'live' | 'sent' | 'vault';
+  capturedAt: number;
+  updatedAt: number;
+  /** mensaje original de WhatsApp (JSON) — solo si se pide con ?raw=1 */
+  raw?: unknown;
+}
+
+export interface ProjectMessages {
+  project: ProjectInfo;
+  messages: ArchivedMessage[];
+  hasMore: boolean;
+}

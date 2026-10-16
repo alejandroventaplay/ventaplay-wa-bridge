@@ -77,6 +77,9 @@ async function main(): Promise<void> {
     ownerPhone: config.OWNER_PHONE ?? null,
     allowSend: config.ALLOW_SEND && Boolean(config.OWNER_PHONE),
     downloadMedia: simulator ? simulator.downloadMedia : createMediaDownloader(logger),
+    exportDir: config.OWNER_PHONE
+      ? resolve(config.PROJECTS_DIR ?? join(config.DATA_DIR, 'proyectos'))
+      : null,
   });
   if (config.OWNER_PHONE)
     logger.info('"Mi vista" activa para el número del dueño (mensajes cifrados en disco)');

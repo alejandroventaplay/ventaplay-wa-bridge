@@ -1,5 +1,14 @@
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { PersonalChatList, PersonalChatMessages, SessionSummary } from '@wa-bridge/shared';
+import type {
+  PersonalChatList,
+  PersonalChatMessages,
+  ProjectInfo,
+  ProjectMessages,
+  SessionSummary,
+} from '@wa-bridge/shared';
 import { loadConfig } from '../src/config.js';
 import { createAuthenticator } from '../src/http/auth.js';
 import { buildServer } from '../src/http/server.js';
@@ -19,7 +28,10 @@ afterEach(async () => {
   cleanups = [];
 });
 
-async function setup(ownerPhone: string | null, opts: { allowSend?: boolean } = {}) {
+async function setup(
+  ownerPhone: string | null,
+  opts: { allowSend?: boolean; exportDir?: string } = {},
+) {
   const config = loadConfig({ NODE_ENV: 'test', API_TOKEN: TOKEN, WA_DRIVER: 'simulator' });
   const t = await tempStore();
   const sim = createSimulator({
@@ -38,6 +50,7 @@ async function setup(ownerPhone: string | null, opts: { allowSend?: boolean } = 
     ownerPhone,
     downloadMedia: sim.downloadMedia,
     allowSend: opts.allowSend ?? false,
+    exportDir: opts.exportDir ?? null,
   });
   await manager.init();
   const app = await buildServer({
@@ -327,5 +340,82 @@ describe('Mi vista', () => {
       payload: { data: Buffer.from('hola').toString('base64'), mimetype: 'text/plain' },
     });
     expect(r.statusCode).toBe(403);
+  });
+
+  it('aísla un grupo: guarda todo, baja la media y exporta la carpeta', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'wa-proy-'));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const { app, id } = await setup('56912345678', { allowSend: true, exportDir: dir });
+    const group = (
+      (
+        await app.inject({ url: `/sessions/${id}/personal/chats`, headers: auth })
+      ).json() as PersonalChatList
+    ).items.find((c) => c.isGroup)!;
+
+    const r = await app.inject({
+      method: 'POST',
+      url: `/sessions/${id}/projects`,
+      headers: auth,
+      payload: { jid: group.jid },
+    });
+    expect(r.statusCode).toBe(200);
+    const project = r.json().project as ProjectInfo;
+    expect(project).toMatchObject({ jid: group.jid, name: group.name, isGroup: true });
+    expect(project.messages).toBeGreaterThan(0);
+
+    // lo que se envía después también queda
+    const sent = await app.inject({
+      method: 'POST',
+      url: `/sessions/${id}/personal/chats/${encodeURIComponent(group.jid)}/send-media`,
+      headers: auth,
+      payload: {
+        data: Buffer.from('%PDF-1.4 factura').toString('base64'),
+        mimetype: 'application/pdf',
+        fileName: 'factura-77.pdf',
+        caption: 'Factura 77',
+      },
+    });
+    expect(sent.statusCode).toBe(200);
+
+    const url = `/sessions/${id}/projects/${encodeURIComponent(group.jid)}`;
+    for (let t = 0; ; t++) {
+      const p = (
+        (await app.inject({ url: `/sessions/${id}/projects`, headers: auth })).json() as {
+          projects: ProjectInfo[];
+        }
+      ).projects[0]!;
+      if (p.media.total > 0 && p.media.downloaded === p.media.total) break;
+      if (t > 100) throw new Error(`media sin bajar: ${JSON.stringify(p.media)}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    const list = (
+      await app.inject({ url: `${url}/messages?raw=1`, headers: auth })
+    ).json() as ProjectMessages;
+    const doc = list.messages.find((m) => m.media?.fileName === 'factura-77.pdf')!;
+    expect(doc).toMatchObject({ source: 'sent', fromMe: true, text: 'Factura 77' });
+    expect(doc.raw).toBeTruthy();
+    const file = await app.inject({ url: `${url}/media/${doc.id}`, headers: auth });
+    expect(file.body).toContain('factura');
+
+    const ex = await app.inject({ method: 'POST', url: `${url}/export`, headers: auth });
+    expect(ex.statusCode).toBe(200);
+    const out = (ex.json().project as ProjectInfo).exportDir!;
+    const files = await readdir(out);
+    expect(files).toEqual(
+      expect.arrayContaining(['mensajes.jsonl', 'mensajes.xlsx', 'proyecto.json', 'media']),
+    );
+    const lines = (await readFile(join(out, 'mensajes.jsonl'), 'utf8')).trim().split('\n');
+    expect(lines).toHaveLength(list.messages.length);
+    expect((await readdir(join(out, 'media'))).some((f) => f.endsWith('factura-77.pdf'))).toBe(
+      true,
+    );
+
+    // otro número no ve proyectos
+    const del = await app.inject({ method: 'DELETE', url, headers: auth });
+    expect(del.statusCode).toBe(204);
+    expect(
+      (await app.inject({ url: `/sessions/${id}/projects`, headers: auth })).json().projects,
+    ).toEqual([]);
   });
 });

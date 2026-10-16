@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { join } from 'node:path';
 import { BufferJSON, DisconnectReason, type BaileysEventMap } from 'baileys';
 import type { Logger } from 'pino';
 import QRCode from 'qrcode';
@@ -15,10 +17,21 @@ import type {
   SessionStatus,
   SessionSummary,
   WaProfile,
+  ArchivedMessage,
+  ProjectInfo,
+  ProjectMessages,
 } from '@wa-bridge/shared';
+import { projectSlug, writeProjectExport } from '../export/project-export.js';
 import type { SessionRecord, SessionStore } from '../store/types.js';
 import { loadAuthState, type StoredAuthState } from '../wa/auth-state.js';
 import type { MediaDownloader, OutgoingMedia, SocketFactory, WaSocketLike } from '../wa/types.js';
+import {
+  ARCHIVE_PREFIX,
+  type ArchiveRecord,
+  ChatArchive,
+  MEDIA_KEY,
+  parseRaw,
+} from './chat-archive.js';
 import { HttpError } from './errors.js';
 import {
   MessageVault,
@@ -66,6 +79,8 @@ export interface WaSessionDeps {
   downloadMedia?: MediaDownloader | null;
   /** el dueño permite enviar mensajes desde su número (con límites) */
   allowSend?: boolean;
+  /** carpeta donde se exportan los proyectos (chats aislados); null = no se exporta */
+  exportDir?: string | null;
 }
 
 export interface WaSessionEvents {
@@ -91,6 +106,11 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   private mediaCache = new Map<string, { buffer: Buffer; mimetype: string; thumbnail: boolean }>();
   private mediaCacheBytes = 0;
   private sendLimiter = new SendLimiter();
+  /** chats aislados ("proyectos"): todo lo que llega, sin tope, con metadatos y media */
+  private archive = new ChatArchive((v) => JSON.stringify(v, BufferJSON.replacer));
+  private mediaRunning = false;
+  private exportTimer: NodeJS.Timeout | null = null;
+  private exporting: Promise<unknown> = Promise.resolve();
 
   private sock: WaSocketLike | null = null;
   private auth: StoredAuthState | null = null;
@@ -225,13 +245,37 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   }
 
   /** guarda en la bóveda lo que llegue, si corresponde */
-  private captureMessages(messages: Parameters<MessageVault['add']>[0]): void {
+  private captureMessages(
+    messages: Parameters<MessageVault['add']>[0],
+    source: 'history' | 'live' = 'live',
+  ): void {
     const owner = this.ownerState();
     if (owner === 'no') {
       if (this.vault.size) this.vault.clear();
+      this.archive.clear();
       return;
     }
     if (this.vault.add(messages) > 0) this.scheduleVaultPersist();
+    this.archiveChanged(this.archive.ingest(messages, source, this.identity(), this.canon));
+  }
+
+  /** jid con el que se identifica un chat (LID y número = el mismo) */
+  private readonly canon = (jid: string) => this.stats.canonicalJid(jid);
+
+  private identity() {
+    const p = this.record.profile;
+    return {
+      meJid: p?.jid ? normalizeJid(p.jid) : null,
+      meLid: p?.lid ? normalizeJid(p.lid) : null,
+    };
+  }
+
+  /** algo cambió en el archivo de proyectos: guardar, bajar media y reexportar */
+  private archiveChanged(n: number): void {
+    if (!n) return;
+    this.scheduleVaultPersist();
+    this.kickMedia();
+    this.scheduleExport();
   }
 
   private scheduleVaultPersist(): void {
@@ -251,14 +295,17 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       return;
     }
     if (this.stats.summary().state === 'complete') this.vault.prune();
-    const entries = this.vault.takeDirty();
+    const vaultEntries = this.vault.takeDirty();
+    const archiveEntries = this.archive.takeDirty();
+    const entries = { ...vaultEntries, ...archiveEntries };
     const keys = Object.keys(entries);
     if (!keys.length) return;
     try {
       await this.deps.store.writeAuth(this.id, entries);
       this.touch();
     } catch (err) {
-      this.vault.markDirty(keys);
+      this.vault.markDirty(Object.keys(vaultEntries));
+      this.archive.markDirty(Object.keys(archiveEntries));
       this.log.error({ err }, 'no se pudieron guardar los mensajes de "Mi vista"');
       this.scheduleVaultPersist();
     }
@@ -276,10 +323,25 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     } catch (err) {
       this.log.warn({ err }, 'no se pudieron cargar los mensajes de "Mi vista"');
     }
+    try {
+      const keys = (await this.deps.store.listAuthKeys(this.id, ARCHIVE_PREFIX)).filter(
+        (k) => !k.startsWith('archive:media:'),
+      );
+      if (keys.length) {
+        this.archive.load(await this.deps.store.readAuth(this.id, keys));
+        this.log.info({ proyectos: this.archive.list().length }, 'proyectos cargados');
+        this.kickMedia();
+      }
+    } catch (err) {
+      this.log.warn({ err }, 'no se pudieron cargar los proyectos');
+    }
   }
 
   private resetVault(): void {
     this.vault = new MessageVault((v) => JSON.stringify(v, BufferJSON.replacer));
+    this.archive = new ChatArchive((v) => JSON.stringify(v, BufferJSON.replacer));
+    if (this.exportTimer) clearTimeout(this.exportTimer);
+    this.exportTimer = null;
     this.vaultLoaded = true;
     if (this.vaultTimer) clearTimeout(this.vaultTimer);
     this.vaultTimer = null;
@@ -356,6 +418,264 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       m.pushName ??
       null
     );
+  }
+
+  // ------------------------------------------------------------ proyectos (chats aislados)
+
+  /** chats aislados con su resumen */
+  async projects(): Promise<ProjectInfo[]> {
+    this.requireOwner();
+    const names = await this.names();
+    return this.archive.list().map((m) => this.projectInfo(m.jid, names));
+  }
+
+  /**
+   * Aísla un chat: desde ahora se guarda TODO lo que llegue (sin tope), con metadatos
+   * y media. Arranca con lo que ya había en la bóveda.
+   */
+  async isolate(chatJid: string, now = Date.now()): Promise<ProjectInfo> {
+    this.requireOwner();
+    const jid = this.canon(normalizeJid(chatJid));
+    const v = this.mergedVaultFull().get(jid);
+    if (!v?.messages.length && !this.archive.tracked(jid))
+      throw new HttpError(404, 'chat_not_found', 'No hay mensajes guardados de ese chat');
+    this.archive.track(jid, now);
+    const n = this.archive.backfill(jid, v?.messages ?? [], this.identity(), now);
+    this.log.info({ chat: jid, mensajes: n }, 'chat aislado como proyecto');
+    this.archiveChanged(n || 1);
+    const names = await this.names();
+    return this.projectInfo(jid, names);
+  }
+
+  /** deja de aislar el chat y borra su archivo (la exportación en carpeta queda) */
+  async unisolate(chatJid: string): Promise<void> {
+    this.requireOwner();
+    const jid = this.canon(normalizeJid(chatJid));
+    if (!this.archive.tracked(jid))
+      throw new HttpError(404, 'project_not_found', 'Ese chat no está aislado');
+    const keys = this.archive.untrack(jid);
+    await this.deps.store.writeAuth(this.id, Object.fromEntries(keys.map((k) => [k, null])));
+  }
+
+  async projectMessages(
+    chatJid: string,
+    opts: { limit?: number; before?: number | null; raw?: boolean } = {},
+  ): Promise<ProjectMessages> {
+    this.requireOwner();
+    const jid = this.projectJid(chatJid);
+    const names = await this.names();
+    const all = this.archive.messages(jid);
+    const upTo = opts.before ? all.filter((m) => m.timestamp < opts.before!) : all;
+    const limit = Math.min(Math.max(opts.limit ?? 500, 1), 5000);
+    const page = upTo.slice(-limit);
+    return {
+      project: this.projectInfo(jid, names),
+      messages: page.map((r) => this.toArchived(r, names, Boolean(opts.raw))),
+      hasMore: upTo.length > page.length,
+    };
+  }
+
+  /** archivo bajado de un mensaje del proyecto */
+  async projectMedia(
+    chatJid: string,
+    messageId: string,
+  ): Promise<{ buffer: Buffer; mimetype: string; fileName: string | null }> {
+    this.requireOwner();
+    const jid = this.projectJid(chatJid);
+    const rec = this.archive.get(jid, messageId);
+    if (!rec?.media) throw new HttpError(404, 'media_not_found', 'Este mensaje no tiene archivo');
+    const buffer = await this.readArchivedMedia(jid, messageId);
+    if (!buffer)
+      throw new HttpError(
+        404,
+        'media_not_downloaded',
+        rec.media.error
+          ? `No se pudo bajar: ${rec.media.error}`
+          : 'Todavía no se baja este archivo',
+      );
+    return {
+      buffer,
+      mimetype: rec.media.mimetype ?? 'application/octet-stream',
+      fileName: rec.media.fileName ?? null,
+    };
+  }
+
+  /** escribe la carpeta del proyecto (JSONL, Excel, archivos) y devuelve el resumen */
+  async exportProject(chatJid: string, now = Date.now()): Promise<ProjectInfo> {
+    this.requireOwner();
+    const jid = this.projectJid(chatJid);
+    if (!this.deps.exportDir)
+      throw new HttpError(409, 'export_disabled', 'No hay carpeta de exportación configurada');
+    await this.runExport(jid, now);
+    return this.projectInfo(jid, await this.names());
+  }
+
+  private projectJid(chatJid: string): string {
+    const jid = this.canon(normalizeJid(chatJid));
+    if (!this.archive.tracked(jid))
+      throw new HttpError(404, 'project_not_found', 'Ese chat no está aislado');
+    return jid;
+  }
+
+  private async readArchivedMedia(jid: string, id: string): Promise<Buffer | null> {
+    const key = MEDIA_KEY(jid, id);
+    const v = (await this.deps.store.readAuth(this.id, [key])).get(key);
+    return v ? Buffer.from(v, 'base64') : null;
+  }
+
+  private chatName(jid: string, names: Awaited<ReturnType<WaSession['names']>>): string {
+    if (isGroupJid(jid)) return names.groups.get(jid) ?? 'Grupo sin nombre';
+    return names.people.get(jid)?.displayName ?? phoneOf(jid) ?? jid;
+  }
+
+  private personName(
+    p: ArchiveRecord['sender'],
+    fromMe: boolean,
+    names: Awaited<ReturnType<WaSession['names']>>,
+  ): string | null {
+    if (fromMe) return this.record.profile?.name ?? 'Tú';
+    for (const j of [p.jid, p.lid]) {
+      if (!j) continue;
+      const n = names.people.get(this.canon(j))?.displayName;
+      if (n) return n;
+    }
+    return p.pushName ?? p.phone ?? null;
+  }
+
+  private toArchived(
+    r: ArchiveRecord,
+    names: Awaited<ReturnType<WaSession['names']>>,
+    withRaw: boolean,
+  ): ArchivedMessage {
+    const { rawJson, mediaAttempts: _a, ...rest } = r;
+    // quien vino solo por LID: completamos su número con el mapeo LID → número
+    const sender = { ...r.sender };
+    if (!sender.jid && sender.lid) {
+      const pn = this.canon(sender.lid);
+      if (pn.endsWith('@s.whatsapp.net')) {
+        sender.jid = pn;
+        sender.phone = phoneOf(pn);
+      }
+    }
+    const out: ArchivedMessage = {
+      ...rest,
+      sender: { ...sender, name: this.personName(sender, r.fromMe, names) },
+    };
+    if (withRaw) out.raw = parseRaw(rawJson);
+    return out;
+  }
+
+  private projectInfo(jid: string, names: Awaited<ReturnType<WaSession['names']>>): ProjectInfo {
+    const meta = this.archive.meta(jid)!;
+    const list = this.archive.messages(jid);
+    const kinds: ProjectInfo['kinds'] = {};
+    const people = new Set<string>();
+    const media = { total: 0, downloaded: 0, failed: 0, bytes: 0 };
+    for (const m of list) {
+      kinds[m.kind] = (kinds[m.kind] ?? 0) + 1;
+      people.add(m.fromMe ? 'me' : (m.sender.lid ?? m.sender.jid ?? '?'));
+      if (m.media && !m.deleted) {
+        media.total += 1;
+        if (m.media.downloaded) {
+          media.downloaded += 1;
+          media.bytes += m.media.size ?? 0;
+        } else if (m.media.error && m.mediaAttempts >= 3) media.failed += 1;
+      }
+    }
+    return {
+      jid,
+      name: this.chatName(jid, names),
+      isGroup: isGroupJid(jid),
+      since: meta.since,
+      messages: list.length,
+      participants: people.size,
+      first: list[0]?.timestamp ?? null,
+      last: list[list.length - 1]?.timestamp ?? null,
+      kinds,
+      media,
+      exportDir: this.deps.exportDir
+        ? join(this.deps.exportDir, projectSlug(this.chatName(jid, names)))
+        : null,
+      exportedAt: meta.exportedAt,
+    };
+  }
+
+  /** bóveda unificada por contacto, sin recortar a VAULT_PER_CHAT */
+  private mergedVaultFull(): Map<string, { messages: StoredMessage[] }> {
+    const out = new Map<string, { messages: StoredMessage[] }>();
+    for (const [jid, list] of this.vault.entries()) {
+      const key = this.canon(jid);
+      const cur = out.get(key) ?? { messages: [] };
+      cur.messages.push(...list);
+      out.set(key, cur);
+    }
+    return out;
+  }
+
+  /** baja la media pendiente de los proyectos, de a una (HTTPS al CDN, no envía nada) */
+  private kickMedia(): void {
+    if (this.mediaRunning || !this.deps.downloadMedia || this.disposed) return;
+    if (!this.archive.pendingMedia().length) return;
+    this.mediaRunning = true;
+    void this.runMedia().finally(() => {
+      this.mediaRunning = false;
+    });
+  }
+
+  private async runMedia(): Promise<void> {
+    const download = this.deps.downloadMedia!;
+    for (;;) {
+      if (this.disposed || this.loggingOut || !this.record.linked) return;
+      if (this.ownerState() !== 'yes') return;
+      const next = this.archive.pendingMedia()[0];
+      if (!next) return;
+      const { chatJid: jid, id } = next;
+      try {
+        const buffer = await withTimeout(download(parseRaw(next.rawJson)), 60_000);
+        const sha = createHash('sha256').update(buffer).digest('base64');
+        const verified = next.media?.sha256 ? sha === next.media.sha256 : null;
+        await this.deps.store.writeAuth(this.id, {
+          [MEDIA_KEY(jid, id)]: buffer.toString('base64'),
+        });
+        this.archive.mediaDone(jid, id, { ok: true, size: buffer.length, verified });
+      } catch (err) {
+        this.log.info({ chat: jid, err: errorMessage(err) }, 'no se pudo bajar media del proyecto');
+        this.archive.mediaDone(jid, id, { ok: false, error: errorMessage(err) });
+      }
+      this.scheduleVaultPersist();
+      this.scheduleExport();
+    }
+  }
+
+  /** reexporta las carpetas de los proyectos un rato después del último cambio */
+  private scheduleExport(): void {
+    if (!this.deps.exportDir || this.exportTimer) return;
+    this.exportTimer = setTimeout(() => {
+      this.exportTimer = null;
+      for (const p of this.archive.list())
+        void this.runExport(p.jid).catch((err) =>
+          this.log.warn({ err: errorMessage(err) }, 'no se pudo exportar el proyecto'),
+        );
+    }, EXPORT_DEBOUNCE_MS);
+    this.exportTimer.unref?.();
+  }
+
+  private runExport(jid: string, now = Date.now()): Promise<unknown> {
+    const job = this.exporting
+      .catch(() => {})
+      .then(async () => {
+        if (!this.archive.tracked(jid) || !this.deps.exportDir) return;
+        const names = await this.names();
+        const info = this.projectInfo(jid, names);
+        const messages = this.archive.messages(jid).map((r) => this.toArchived(r, names, true));
+        await writeProjectExport(info.exportDir!, info, messages, (id) =>
+          this.readArchivedMedia(jid, id),
+        );
+        this.archive.markExported(jid, now);
+        this.scheduleVaultPersist();
+      });
+    this.exporting = job;
+    return job;
   }
 
   /** chats de "Mi vista": con actividad en la ventana, del más reciente al más antiguo */
@@ -581,6 +901,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       ) as Parameters<MessageVault['add']>[0][number];
       this.vault.add([msg]);
       this.scheduleVaultPersist();
+      this.archiveChanged(this.archive.ingest([msg], 'sent', this.identity(), this.canon, now));
     }
     this.touch();
     const names = await this.names();
@@ -813,7 +1134,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
         syncType: h.syncType ?? null,
         isLatest: h.isLatest ?? null,
       });
-      this.captureMessages(h.messages);
+      this.captureMessages(h.messages, 'history');
       this.log.info(
         {
           chats: h.chats.length,
@@ -849,6 +1170,15 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       this.stats.addMessages(messages);
       this.captureMessages(messages);
       this.touch();
+    });
+    on('messages.update', (u) => {
+      this.archiveChanged(this.archive.updates(u as never, this.canon));
+    });
+    on('messages.reaction', (r) => {
+      this.archiveChanged(this.archive.reactions(r as never, this.identity(), this.canon));
+    });
+    on('message-receipt.update', (r) => {
+      this.archiveChanged(this.archive.receipts(r as never, this.canon));
     });
     on('lid-mapping.update', (m) => {
       this.stats.addLidMapping(m);
@@ -1095,6 +1425,8 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     if (this.persistTimer) clearTimeout(this.persistTimer);
     if (this.emitTimer) clearTimeout(this.emitTimer);
     if (this.vaultTimer) clearTimeout(this.vaultTimer);
+    if (this.exportTimer) clearTimeout(this.exportTimer);
+    this.exportTimer = null;
     this.persistTimer = null;
     this.emitTimer = null;
     this.vaultTimer = null;
@@ -1144,6 +1476,9 @@ function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
 }
+
+/** espera tras el último cambio antes de reescribir la carpeta del proyecto */
+const EXPORT_DEBOUNCE_MS = 8_000;
 
 /** tope de lo que se puede enviar (WhatsApp comprime fotos y videos sobre ~16 MB) */
 export const MAX_SEND_BYTES = 16 * 1024 * 1024;

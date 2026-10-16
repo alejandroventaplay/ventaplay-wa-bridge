@@ -26,6 +26,8 @@ export interface SessionManagerOptions {
   downloadMedia?: MediaDownloader | null;
   /** el dueño permite enviar desde su número (con límites) */
   allowSend?: boolean;
+  /** carpeta donde se exportan los proyectos (chats aislados) */
+  exportDir?: string | null;
 }
 
 /** Dueño de todas las sesiones vivas del proceso. */
@@ -137,6 +139,7 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
       ownerPhone: this.opts.ownerPhone ?? null,
       downloadMedia: this.opts.downloadMedia ?? null,
       allowSend: this.opts.allowSend ?? false,
+      exportDir: this.opts.exportDir ?? null,
     });
     session.on('update', (summary) => this.emit('update', summary));
     this.sessions.set(record.id, session);

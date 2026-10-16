@@ -7,6 +7,7 @@ import {
   Download,
   FileText,
   Film,
+  FolderKanban,
   Headphones,
   ImageOff,
   Lock,
@@ -48,7 +49,17 @@ type Filter = 'people' | 'groups';
  * mensajes de cada uno, al estilo WhatsApp. Con ALLOW_SEND puedes escribir y mandar
  * fotos o archivos (con límites); nunca marca como leído ni te pone "en línea".
  */
-export function MyView({ session }: { session: SessionSummary }) {
+export function MyView({
+  session,
+  projects = [],
+  onIsolate,
+}: {
+  session: SessionSummary;
+  /** chats aislados como proyecto */
+  projects?: string[];
+  /** aísla el chat (o abre su pestaña si ya lo está) */
+  onIsolate?: (jid: string) => Promise<void>;
+}) {
   const id = session.id;
   const [list, setList] = useState<PersonalChatList | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -165,6 +176,8 @@ export function MyView({ session }: { session: SessionSummary }) {
               chat={current}
               now={now}
               sendEnabled={Boolean(session.personal?.sendEnabled)}
+              isolated={projects.includes(current.jid)}
+              onIsolate={onIsolate}
               onBack={() => setSelected(null)}
             />
           ) : (
@@ -314,14 +327,19 @@ function ChatPanel({
   chat,
   now,
   sendEnabled,
+  isolated,
+  onIsolate,
   onBack,
 }: {
   sessionId: string;
   chat: PersonalChat;
   now: number;
   sendEnabled: boolean;
+  isolated: boolean;
+  onIsolate?: (jid: string) => Promise<void>;
   onBack: () => void;
 }) {
+  const [isolating, setIsolating] = useState(false);
   const [data, setData] = useState<PersonalChatMessages | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dropped, setDropped] = useState<File | null>(null);
@@ -368,6 +386,28 @@ function ChatPanel({
           <p className="truncate font-black">{chat.name}</p>
           <p className="truncate text-xs text-ink-soft">{subtitle}</p>
         </div>
+        {onIsolate && (
+          <button
+            className={isolated ? 'btn-secondary px-3 py-2' : 'btn-secondary px-3 py-2'}
+            disabled={isolating}
+            title={
+              isolated
+                ? 'Este chat ya se guarda completo: abre su pestaña'
+                : 'Guardar TODO este chat (sin tope) con sus metadatos y archivos, en su propia pestaña'
+            }
+            onClick={() => {
+              setIsolating(true);
+              onIsolate(chat.jid)
+                .catch((e: Error) => setError(e.message))
+                .finally(() => setIsolating(false));
+            }}
+          >
+            {isolating ? <Spinner className="size-4" /> : <FolderKanban className="size-4" />}
+            <span className="hidden sm:inline">
+              {isolated ? 'Ver proyecto' : 'Aislar como proyecto'}
+            </span>
+          </button>
+        )}
       </header>
 
       <div

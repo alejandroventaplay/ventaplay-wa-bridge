@@ -221,7 +221,7 @@ export function extractContent(message: object | null | undefined): Extracted | 
 }
 
 /** protocolMessage: borrado (0) o edición (14) de un mensaje anterior */
-function protocolAction(
+export function protocolAction(
   message: object | null | undefined,
 ): { type: 'revoke' | 'edit'; id: string; edited?: Extracted | null } | null {
   const m = unwrapMessage(message);

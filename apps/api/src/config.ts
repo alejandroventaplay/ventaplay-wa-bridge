@@ -32,6 +32,8 @@ const EnvSchema = z.object({
   /** 'file' = carpeta local cifrada · 'postgres' = DATABASE_URL (Supabase) */
   STORAGE: z.enum(['file', 'postgres']).default('file'),
   DATA_DIR: z.string().default('./data'),
+  /** carpeta donde se exportan los proyectos (chats aislados); por defecto DATA_DIR/proyectos */
+  PROJECTS_DIR: z.string().optional(),
   DATABASE_URL: z.string().optional(),
   /** clave AES-256 (64 caracteres hex) para cifrar credenciales y datos de sesión */
   ENCRYPTION_KEY: z

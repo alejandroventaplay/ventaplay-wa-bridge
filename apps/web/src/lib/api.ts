@@ -1,6 +1,8 @@
 import type {
   PersonalChatList,
   PersonalChatMessages,
+  ProjectInfo,
+  ProjectMessages,
   SendResult,
   SessionSummary,
 } from '@wa-bridge/shared';
@@ -134,7 +136,46 @@ export const api = {
         asDocument: Boolean(opts.asDocument),
       }),
     }),
+  /** proyectos: chats aislados con todo su dato */
+  projects: (id: string) =>
+    request<{ projects: ProjectInfo[] }>(`/sessions/${id}/projects`).then((r) => r.projects),
+  isolate: (id: string, jid: string) =>
+    request<{ project: ProjectInfo }>(`/sessions/${id}/projects`, {
+      method: 'POST',
+      body: JSON.stringify({ jid }),
+    }).then((r) => r.project),
+  projectMessages: (
+    id: string,
+    jid: string,
+    opts: { limit?: number; before?: number; raw?: boolean } = {},
+  ) => {
+    const q = new URLSearchParams({ limit: String(opts.limit ?? 5000) });
+    if (opts.before) q.set('before', String(opts.before));
+    if (opts.raw) q.set('raw', '1');
+    return request<ProjectMessages>(
+      `/sessions/${id}/projects/${encodeURIComponent(jid)}/messages?${q}`,
+    );
+  },
+  exportProject: (id: string, jid: string) =>
+    request<{ project: ProjectInfo }>(
+      `/sessions/${id}/projects/${encodeURIComponent(jid)}/export`,
+      { method: 'POST' },
+    ).then((r) => r.project),
 };
+
+/** archivo bajado de un mensaje de proyecto, como blob URL */
+export async function projectMediaBlob(id: string, jid: string, msgId: string): Promise<string> {
+  const token = await currentToken();
+  const res = await fetch(
+    `${API_URL}/sessions/${id}/projects/${encodeURIComponent(jid)}/media/${encodeURIComponent(msgId)}`,
+    { headers: token ? { authorization: `Bearer ${token}` } : {} },
+  );
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+    throw new ApiError(res.status, body.error ?? 'error', body.message ?? `Error ${res.status}`);
+  }
+  return URL.createObjectURL(await res.blob());
+}
 
 /** máximo que se puede enviar (igual que la API) */
 export const MAX_SEND_BYTES = 16 * 1024 * 1024;

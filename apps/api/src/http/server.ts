@@ -50,6 +50,15 @@ const SendMediaBody = z.object({
   asDocument: z.boolean().default(false),
 });
 const MEDIA_BODY_LIMIT = 23 * 1024 * 1024;
+const ProjectBody = z.object({ jid: z.string().min(3).max(120) });
+const ProjectQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(5000).default(500),
+  before: z.coerce.number().int().positive().nullish(),
+  raw: z
+    .enum(['0', '1', 'true', 'false'])
+    .optional()
+    .transform((v) => v === '1' || v === 'true'),
+});
 const ExportQuery = z.object({ modo: z.enum(['util', 'completo']).default('util') });
 const CreateBody = z.object({ label: z.string().trim().max(80).nullish() }).nullish();
 const HEARTBEAT_MS = 20_000;
@@ -236,6 +245,54 @@ export async function buildServer(deps: ServerDeps) {
         });
       },
     );
+
+    // ---------------------------------------------- proyectos (chats aislados del dueño)
+
+    api.get('/sessions/:id/projects', async (req, reply) => {
+      const { id } = IdParams.parse(req.params);
+      reply.header('cache-control', 'no-store');
+      return { projects: await manager.get(id).projects() };
+    });
+
+    /** aísla un chat: desde ahora se guarda todo, con metadatos y media */
+    api.post('/sessions/:id/projects', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      const { jid } = ProjectBody.parse(req.body ?? {});
+      req.log.info({ session: id, chat: jid }, 'aislar chat como proyecto');
+      return { project: await manager.get(id).isolate(jid) };
+    });
+
+    api.delete('/sessions/:id/projects/:jid', async (req, reply) => {
+      const { id, jid } = ChatParams.parse(req.params);
+      await manager.get(id).unisolate(jid);
+      return reply.status(204).send();
+    });
+
+    api.get('/sessions/:id/projects/:jid/messages', async (req, reply) => {
+      const { id, jid } = ChatParams.parse(req.params);
+      const q = ProjectQuery.parse(req.query);
+      reply.header('cache-control', 'no-store');
+      return manager.get(id).projectMessages(jid, q);
+    });
+
+    api.get('/sessions/:id/projects/:jid/media/:msgId', async (req, reply) => {
+      const { id, jid, msgId } = MediaParams.parse(req.params);
+      const m = await manager.get(id).projectMedia(jid, msgId);
+      reply.header('cache-control', 'private, max-age=3600');
+      reply.header('content-type', m.mimetype);
+      if (m.fileName)
+        reply.header(
+          'content-disposition',
+          `inline; filename*=UTF-8''${encodeURIComponent(m.fileName)}`,
+        );
+      return reply.send(m.buffer);
+    });
+
+    /** reescribe la carpeta del proyecto (JSONL, Excel y archivos) */
+    api.post('/sessions/:id/projects/:jid/export', async (req) => {
+      const { id, jid } = ChatParams.parse(req.params);
+      return { project: await manager.get(id).exportProject(jid) };
+    });
 
     /** foto, audio, video, sticker o documento de un mensaje guardado */
     api.get('/sessions/:id/personal/chats/:jid/media/:msgId', async (req, reply) => {
