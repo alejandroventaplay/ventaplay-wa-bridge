@@ -1,13 +1,15 @@
 import makeWASocket, {
   Browsers,
+  downloadMediaMessage,
   fetchLatestWaWebVersion,
   makeCacheableSignalKeyStore,
+  type WAMessage,
   type WAVersion,
 } from 'baileys';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import type { Logger } from 'pino';
-import { enforceReadOnly } from './read-only.js';
-import type { SocketFactory, WaSocketLike } from './types.js';
+import { enforceReadOnly, ReadOnlyViolation } from './read-only.js';
+import type { MediaDownloader, SocketFactory, WaSocketLike } from './types.js';
 
 const VERSION_TTL_MS = 6 * 60 * 60 * 1000;
 let cachedVersion: { version: WAVersion; at: number } | null = null;
@@ -69,4 +71,22 @@ export function createBaileysFactory(opts: BaileysFactoryOptions = {}): SocketFa
     logger.debug({ blocked: blocked.length }, 'candado de solo lectura aplicado');
     return sock as unknown as WaSocketLike;
   };
+}
+
+/**
+ * Baja y descifra la media de un mensaje guardado desde el CDN de WhatsApp (HTTPS).
+ * Si el archivo expiró, NO le pedimos al teléfono que lo vuelva a subir: eso es una
+ * escritura (updateMediaMessage) y está bloqueada.
+ */
+export function createMediaDownloader(logger: Logger): MediaDownloader {
+  return (message) =>
+    downloadMediaMessage(
+      message as WAMessage,
+      'buffer',
+      {},
+      {
+        logger,
+        reuploadRequest: () => Promise.reject(new ReadOnlyViolation('updateMediaMessage')),
+      },
+    );
 }

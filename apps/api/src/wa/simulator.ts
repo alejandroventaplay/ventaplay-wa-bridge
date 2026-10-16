@@ -1,7 +1,12 @@
 import { EventEmitter } from 'node:events';
 import type { BaileysEventMap, WABusinessProfile } from 'baileys';
 import type { HistoryBatch } from '../session/stats.js';
-import type { SocketFactory, SocketFactoryOptions, WaSocketLike } from './types.js';
+import type {
+  MediaDownloader,
+  SocketFactory,
+  SocketFactoryOptions,
+  WaSocketLike,
+} from './types.js';
 
 /**
  * Simulador de WhatsApp para desarrollar la UI sin un teléfono (WA_DRIVER=simulator).
@@ -158,6 +163,8 @@ export interface Simulator {
   factory: SocketFactory;
   /** simula que el teléfono escanea el QR de esa sesión; false si no está mostrando QR */
   scan(sessionId: string): boolean;
+  /** "descarga" la media falsa de los mensajes del simulador */
+  downloadMedia: MediaDownloader;
 }
 
 export function createSimulator(timing: Partial<Timing> = {}): Simulator {
@@ -193,7 +200,51 @@ export function createSimulator(timing: Partial<Timing> = {}): Simulator {
       sock.scan();
       return true;
     },
+    downloadMedia: async (raw) => fakeMedia(raw),
   };
+}
+
+/** media falsa: una imagen SVG, un tono WAV o un PDF mínimo */
+function fakeMedia(raw: unknown): Buffer {
+  const m = (raw as { message?: Record<string, { caption?: string }> } | null)?.message ?? {};
+  if (m.imageMessage) {
+    const label = (m.imageMessage.caption ?? 'Foto').slice(0, 24).replace(/[<&>]/g, '');
+    return Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="320" viewBox="0 0 480 320">` +
+        `<defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#450693"/>` +
+        `<stop offset="1" stop-color="#08c8a7"/></linearGradient></defs>` +
+        `<rect width="480" height="320" fill="url(#g)"/><text x="240" y="170" font-family="sans-serif" ` +
+        `font-size="28" fill="#fff" text-anchor="middle">${label}</text></svg>`,
+    );
+  }
+  if (m.audioMessage) return wavTone(1.2, 440);
+  if (m.documentMessage)
+    return Buffer.from(
+      '%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj ' +
+        '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 144]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF',
+    );
+  throw new Error('sin media');
+}
+
+function wavTone(seconds: number, hz: number): Buffer {
+  const rate = 8000;
+  const n = Math.floor(rate * seconds);
+  const buf = Buffer.alloc(44 + n * 2);
+  buf.write('RIFF', 0);
+  buf.writeUInt32LE(36 + n * 2, 4);
+  buf.write('WAVEfmt ', 8);
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(rate, 24);
+  buf.writeUInt32LE(rate * 2, 28);
+  buf.writeUInt16LE(2, 32);
+  buf.writeUInt16LE(16, 34);
+  buf.write('data', 36);
+  buf.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++)
+    buf.writeInt16LE(Math.round(Math.sin((2 * Math.PI * hz * i) / rate) * 8000), 44 + i * 2);
+  return buf;
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +289,23 @@ const LAST = [
   'Fuentes',
   'Hernández',
 ];
+const PHRASES = [
+  'Hola! ¿Tienes hora para mañana?',
+  'Perfecto, nos vemos a las 18:00 👍',
+  '¿Cuánto sale el corte + barba?',
+  'Te transfiero ahora',
+  'Listo, quedó agendado',
+  'jajaja sí',
+  'Voy un poco atrasado, 10 min',
+  'Gracias!! quedó increíble 🔥',
+  '¿Abren el domingo?',
+  'Dale, confirmo',
+  'Te mando la dirección',
+  '¿Me reservas para el viernes?',
+  'Ok 👌',
+  'Buenísimo, gracias',
+];
+
 const GROUPS = [
   'Equipo Barbería 💈',
   'Proveedores insumos',
@@ -289,11 +357,32 @@ export function buildFakeHistory(seed = 42): HistoryBatch[] {
 
   const messages: HistoryBatch['messages'] = [];
   let n = 0;
-  for (const c of chats) {
+  const month = 30 * 24 * 3600 * 1000;
+  chats.forEach((c, ci) => {
     const w = c.p ? c.p.weight : groups.find((g) => g.jid === c.id)!.weight;
     const count = Math.max(1, Math.round((w / totalWeight) * 2600));
     for (let k = 0; k < count; k++) {
       const fromMe = rand() < 0.45;
+      // los primeros chats tienen actividad reciente (para "Mi vista")
+      const recent = ci % 3 !== 2 && k < 14;
+      const ts = recent ? now - rand() * 0.7 * month : now - month - rand() ** 0.6 * twoYears;
+      const r = rand();
+      const message =
+        r < 0.08
+          ? {
+              imageMessage: { mimetype: 'image/svg+xml', caption: rand() < 0.5 ? 'Así quedó' : '' },
+            }
+          : r < 0.12
+            ? { audioMessage: { mimetype: 'audio/wav', seconds: 1, ptt: true } }
+            : r < 0.14
+              ? {
+                  documentMessage: {
+                    mimetype: 'application/pdf',
+                    fileName: 'Cotización.pdf',
+                    fileLength: 412,
+                  },
+                }
+              : { conversation: PHRASES[Math.floor(rand() * PHRASES.length)]! };
       messages.push({
         key: {
           id: `SIM${(n++).toString(16).toUpperCase()}`,
@@ -304,12 +393,12 @@ export function buildFakeHistory(seed = 42): HistoryBatch[] {
             : {}),
           fromMe,
         } as never,
-        message: { conversation: 'hola' },
-        messageTimestamp: Math.floor((now - rand() ** 0.6 * twoYears) / 1000),
+        message,
+        messageTimestamp: Math.floor(ts / 1000),
         pushName: c.p && !fromMe ? c.p.name.split(' ')[0]! : null,
       });
     }
-  }
+  });
   messages.sort((a, b) => Number(b.messageTimestamp) - Number(a.messageTimestamp));
 
   const contacts = people.map((p, i) => ({

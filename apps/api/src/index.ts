@@ -9,7 +9,7 @@ import { SessionManager } from './session/manager.js';
 import { FileSessionStore } from './store/file-store.js';
 import { PgSessionStore } from './store/pg-store.js';
 import type { SessionStore } from './store/types.js';
-import { createBaileysFactory } from './wa/baileys-socket.js';
+import { createBaileysFactory, createMediaDownloader } from './wa/baileys-socket.js';
 import { createSimulator } from './wa/simulator.js';
 
 async function main(): Promise<void> {
@@ -73,7 +73,11 @@ async function main(): Promise<void> {
     logger,
     maxSessions: config.MAX_SESSIONS,
     wipeOnLogout: config.WIPE_ON_LOGOUT,
+    ownerPhone: config.OWNER_PHONE ?? null,
+    downloadMedia: simulator ? simulator.downloadMedia : createMediaDownloader(logger),
   });
+  if (config.OWNER_PHONE)
+    logger.info('"Mi vista" activa para el número del dueño (mensajes cifrados en disco)');
 
   const auth = createAuthenticator(config);
   if (auth.mode === 'none') {

@@ -62,6 +62,7 @@ function summaryOf(s: StatsAggregator): SessionSummary {
     },
     stats: s.summary(),
     lastError: null,
+    personal: null,
     readOnly: true,
   };
 }

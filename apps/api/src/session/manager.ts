@@ -3,7 +3,8 @@ import { EventEmitter } from 'node:events';
 import type { Logger } from 'pino';
 import { emptyStats, type SessionSummary } from '@wa-bridge/shared';
 import type { SessionRecord, SessionStore } from '../store/types.js';
-import type { SocketFactory } from '../wa/types.js';
+import type { MediaDownloader, SocketFactory } from '../wa/types.js';
+import { HttpError } from './errors.js';
 import { WaSession } from './wa-session.js';
 
 export interface ManagerEvents {
@@ -11,15 +12,7 @@ export interface ManagerEvents {
   deleted: [string];
 }
 
-export class HttpError extends Error {
-  constructor(
-    readonly statusCode: number,
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
+export { HttpError };
 
 export interface SessionManagerOptions {
   store: SessionStore;
@@ -27,6 +20,10 @@ export interface SessionManagerOptions {
   logger: Logger;
   maxSessions: number;
   wipeOnLogout: boolean;
+  /** número (solo dígitos) del dueño: solo ese WhatsApp guarda mensajes para "Mi vista" */
+  ownerPhone?: string | null;
+  /** descarga la media de un mensaje guardado (fotos, audios…) */
+  downloadMedia?: MediaDownloader | null;
 }
 
 /** Dueño de todas las sesiones vivas del proceso. */
@@ -135,6 +132,8 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
       socketFactory: this.opts.socketFactory,
       logger: this.opts.logger,
       wipeOnLogout: this.opts.wipeOnLogout,
+      ownerPhone: this.opts.ownerPhone ?? null,
+      downloadMedia: this.opts.downloadMedia ?? null,
     });
     session.on('update', (summary) => this.emit('update', summary));
     this.sessions.set(record.id, session);

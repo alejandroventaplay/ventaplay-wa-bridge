@@ -635,6 +635,11 @@ export class StatsAggregator {
     return agg;
   }
 
+  /** el mismo contacto por LID o por número → su jid con número si lo conocemos */
+  canonicalJid(jid: string): string {
+    return this.canonical(normalizeJid(jid));
+  }
+
   private canonical(jid: string): string {
     return isLidJid(jid) ? (this.lidToPn.get(jid) ?? jid) : jid;
   }

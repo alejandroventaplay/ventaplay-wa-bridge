@@ -26,6 +26,9 @@ export interface ServerDeps {
 }
 
 const IdParams = z.object({ id: z.string().uuid() });
+const JID = z.string().regex(/^[\w.-]{3,64}@(s\.whatsapp\.net|lid|g\.us)$/, 'chat inválido');
+const ChatParams = IdParams.extend({ jid: JID });
+const MediaParams = ChatParams.extend({ msgId: z.string().regex(/^[\w-]{4,128}$/) });
 const ExportQuery = z.object({ modo: z.enum(['util', 'completo']).default('util') });
 const CreateBody = z.object({ label: z.string().trim().max(80).nullish() }).nullish();
 const HEARTBEAT_MS = 20_000;
@@ -47,7 +50,7 @@ export async function buildServer(deps: ServerDeps) {
     methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Authorization', 'Content-Type'],
     // para que la web lea el nombre del archivo exportado
-    exposedHeaders: ['Content-Disposition'],
+    exposedHeaders: ['Content-Disposition', 'X-Media-Thumbnail'],
   });
 
   app.setErrorHandler((err, req, reply) => {
@@ -145,6 +148,33 @@ export async function buildServer(deps: ServerDeps) {
         .header('content-disposition', `attachment; filename="${name}"`)
         .header('cache-control', 'no-store')
         .send(file);
+    });
+
+    // ------------------------------------------------ Mi vista (solo el número dueño)
+
+    /** chats con actividad en los últimos 30 días (individuales y grupos) */
+    api.get('/sessions/:id/personal/chats', async (req, reply) => {
+      const { id } = IdParams.parse(req.params);
+      reply.header('cache-control', 'no-store');
+      return manager.get(id).personalChats();
+    });
+
+    /** últimos mensajes guardados de un chat */
+    api.get('/sessions/:id/personal/chats/:jid/messages', async (req, reply) => {
+      const { id, jid } = ChatParams.parse(req.params);
+      reply.header('cache-control', 'no-store');
+      return manager.get(id).personalMessages(jid);
+    });
+
+    /** foto, audio, video, sticker o documento de un mensaje guardado */
+    api.get('/sessions/:id/personal/chats/:jid/media/:msgId', async (req, reply) => {
+      const { id, jid, msgId } = MediaParams.parse(req.params);
+      const media = await manager.get(id).personalMedia(jid, msgId);
+      return reply
+        .header('content-type', media.mimetype)
+        .header('cache-control', 'private, max-age=3600')
+        .header('x-media-thumbnail', media.thumbnail ? '1' : '0')
+        .send(media.buffer);
     });
 
     api.post('/sessions/:id/connect', async (req) => {

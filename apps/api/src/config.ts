@@ -52,6 +52,16 @@ const EnvSchema = z.object({
   /** borra las credenciales locales si WhatsApp desvincula el dispositivo */
   WIPE_ON_LOGOUT: bool.default(true),
 
+  /**
+   * Tu número (con o sin +, p.ej. 56912345678). Solo si el WhatsApp vinculado es este,
+   * se guardan (cifrados) los últimos mensajes de cada chat para "Mi vista".
+   */
+  OWNER_PHONE: z
+    .string()
+    .transform((v) => v.replace(/\D/g, ''))
+    .pipe(z.string().regex(/^\d{8,15}$/, 'OWNER_PHONE debe ser un número con código de país'))
+    .optional(),
+
   /** solo desarrollo local: acciones de una lista cerrada pedidas por archivo (ver src/dev) */
   DEV_RUNNER: bool.default(false),
 });

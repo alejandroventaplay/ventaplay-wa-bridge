@@ -32,3 +32,6 @@ export interface SocketFactoryOptions {
 }
 
 export type SocketFactory = (opts: SocketFactoryOptions) => Promise<WaSocketLike>;
+
+/** Descarga (y descifra) la media de un mensaje de WhatsApp. Solo HTTPS al CDN; no envía nada. */
+export type MediaDownloader = (message: unknown) => Promise<Buffer>;

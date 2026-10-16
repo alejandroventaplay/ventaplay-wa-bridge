@@ -8,6 +8,23 @@ y **lee** sus contactos, chats e historial para migrarlos a VentaPlay.
 > socket (`apps/api/src/wa/read-only.ts`), un test revisa que sigan bloqueados y una
 > regla de ESLint impide llamarlos.
 
+## Mi vista (solo tu número)
+
+Si el WhatsApp vinculado es el del dueño (`OWNER_PHONE` en `apps/api/.env`), la
+sesión muestra dos pestañas: **Mi vista** y **General** (la de siempre).
+
+- Mi vista separa **Conversaciones** y **Grupos** y los muestra como WhatsApp: los
+  chats con actividad en los **últimos 30 días** y sus **últimos 10 mensajes**, con
+  fotos, audios, videos, stickers y documentos (si WhatsApp ya no tiene el archivo,
+  se ve la miniatura).
+- Es la única excepción a "no guardar contenido": esos mensajes se guardan
+  **cifrados** junto a las credenciales y se **borran al desconectar**. Con cualquier
+  otro número no se guarda nada y la pestaña no aparece.
+- Sigue siendo **solo lectura**: no envía, no marca como leído, no pide al teléfono
+  re-subir archivos vencidos.
+- El contenido llega por el History Sync al vincular y luego en vivo. Si el número
+  se vinculó antes de activar `OWNER_PHONE`, hay que volver a vincularlo una vez.
+
 ## Sprint 1 — qué hay
 
 - QR con la marca de VentaPlay (logo al centro, corrección de errores alta) que se
@@ -88,18 +105,21 @@ existe, solo hace `git push`. El login en GitHub lo hace la persona, en el naveg
 Todas las rutas, salvo `/health`, piden `Authorization: Bearer <token>` (o
 `?access_token=` en los streams SSE).
 
-| Método y ruta                | Para qué                                      |
-| ---------------------------- | --------------------------------------------- |
-| `GET /health`                | estado, driver, tipo de auth                  |
-| `GET /sessions`              | lista de sesiones                             |
-| `POST /sessions` `{label}`   | crea una sesión y arranca el QR               |
-| `GET /sessions/:id`          | resumen (estado, QR, perfil, estadísticas)    |
-| `GET /sessions/:id/events`   | SSE: QR que rota, estado y sync en vivo       |
-| `GET /events`                | SSE de todas las sesiones                     |
-| `GET /sessions/:id/export/contacts.xlsx` | Excel de contactos y grupos (sin mensajes) |
-| `POST /sessions/:id/connect` | QR nuevo / reintentar                         |
-| `POST /sessions/:id/logout`  | desvincula el teléfono, conserva estadísticas |
-| `DELETE /sessions/:id`       | desvincula y borra todo                       |
+| Método y ruta                                        | Para qué                                                             |
+| ---------------------------------------------------- | -------------------------------------------------------------------- |
+| `GET /health`                                        | estado, driver, tipo de auth                                         |
+| `GET /sessions`                                      | lista de sesiones                                                    |
+| `POST /sessions` `{label}`                           | crea una sesión y arranca el QR                                      |
+| `GET /sessions/:id`                                  | resumen (estado, QR, perfil, estadísticas)                           |
+| `GET /sessions/:id/events`                           | SSE: QR que rota, estado y sync en vivo                              |
+| `GET /events`                                        | SSE de todas las sesiones                                            |
+| `GET /sessions/:id/export/contacts.xlsx`             | Excel de contactos y grupos (sin mensajes)                           |
+| `GET /sessions/:id/personal/chats`                   | Mi vista: chats y grupos de los últimos 30 días (solo `OWNER_PHONE`) |
+| `GET /sessions/:id/personal/chats/:jid/messages`     | Mi vista: últimos 10 mensajes del chat                               |
+| `GET /sessions/:id/personal/chats/:jid/media/:msgId` | Mi vista: foto, audio, video o documento                             |
+| `POST /sessions/:id/connect`                         | QR nuevo / reintentar                                                |
+| `POST /sessions/:id/logout`                          | desvincula el teléfono, conserva estadísticas                        |
+| `DELETE /sessions/:id`                               | desvincula y borra todo                                              |
 
 ## Producción
 

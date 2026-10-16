@@ -1,12 +1,32 @@
 import { EventEmitter } from 'node:events';
-import { DisconnectReason, type BaileysEventMap } from 'baileys';
+import { BufferJSON, DisconnectReason, type BaileysEventMap } from 'baileys';
 import type { Logger } from 'pino';
 import QRCode from 'qrcode';
-import type { QrCode, SessionStatus, SessionSummary, WaProfile } from '@wa-bridge/shared';
+import type {
+  ChatMessage,
+  PersonalChat,
+  PersonalChatList,
+  PersonalChatMessages,
+  PersonalVaultInfo,
+  QrCode,
+  SessionStatus,
+  SessionSummary,
+  WaProfile,
+} from '@wa-bridge/shared';
 import type { SessionRecord, SessionStore } from '../store/types.js';
 import { loadAuthState, type StoredAuthState } from '../wa/auth-state.js';
-import type { SocketFactory, WaSocketLike } from '../wa/types.js';
-import { type Directory, normalizeJid, phoneOf, StatsAggregator } from './stats.js';
+import type { MediaDownloader, SocketFactory, WaSocketLike } from '../wa/types.js';
+import { HttpError } from './errors.js';
+import {
+  MessageVault,
+  type StoredMessage,
+  unwrapMessage,
+  VAULT_KEY_PREFIX,
+  VAULT_PER_CHAT,
+  VAULT_WINDOW_DAYS,
+  VAULT_WINDOW_MS,
+} from './message-vault.js';
+import { type Directory, isGroupJid, normalizeJid, phoneOf, StatsAggregator } from './stats.js';
 
 /** WhatsApp muestra el primer QR ~60 s y los siguientes ~20 s */
 const FIRST_QR_TTL_MS = 60_000;
@@ -25,12 +45,19 @@ const EMIT_THROTTLE_MS = 300;
 const PERSIST_THROTTLE_MS = 2_000;
 /** cada cuánto releemos los mapeos LID → número guardados por Baileys */
 const LID_RELOAD_MS = 30_000;
+/** cada cuánto guardamos los mensajes nuevos de "Mi vista" */
+const VAULT_PERSIST_MS = 3_000;
+/** media descargada que mantenemos en memoria */
+const MEDIA_CACHE_BYTES = 64 * 1024 * 1024;
 
 export interface WaSessionDeps {
   store: SessionStore;
   socketFactory: SocketFactory;
   logger: Logger;
   wipeOnLogout: boolean;
+  /** número (solo dígitos) del dueño; solo ese WhatsApp guarda mensajes */
+  ownerPhone?: string | null;
+  downloadMedia?: MediaDownloader | null;
 }
 
 export interface WaSessionEvents {
@@ -49,6 +76,12 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   private record: SessionRecord;
   private readonly log: Logger;
   private stats: StatsAggregator;
+  /** últimos mensajes por chat, solo si es el WhatsApp del dueño ("Mi vista") */
+  private vault = new MessageVault((v) => JSON.stringify(v, BufferJSON.replacer));
+  private vaultTimer: NodeJS.Timeout | null = null;
+  private vaultLoaded = false;
+  private mediaCache = new Map<string, { buffer: Buffer; mimetype: string; thumbnail: boolean }>();
+  private mediaCacheBytes = 0;
 
   private sock: WaSocketLike | null = null;
   private auth: StoredAuthState | null = null;
@@ -142,8 +175,285 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       profile: this.record.profile,
       stats: this.stats.summary(),
       lastError: this.record.lastError,
+      personal: this.personalInfo(),
       readOnly: true,
     };
+  }
+
+  // ------------------------------------------------------------------ Mi vista
+
+  /**
+   * ¿Es el WhatsApp del dueño? 'unknown' mientras no sabemos qué número se vinculó
+   * (justo después de escanear): ahí guardamos en memoria pero no en disco.
+   */
+  private ownerState(): 'yes' | 'no' | 'unknown' {
+    const owner = this.deps.ownerPhone?.replace(/\D/g, '');
+    if (!owner) return 'no';
+    const me = this.auth?.state.creds.me?.id ?? this.record.profile?.jid ?? null;
+    if (!me) return 'unknown';
+    const phone = (me.split('@')[0] ?? '').split(':')[0] ?? '';
+    return phone === owner ? 'yes' : 'no';
+  }
+
+  private personalInfo(): PersonalVaultInfo | null {
+    // desvinculado: los mensajes se borraron junto con las credenciales
+    if (!this.record.linked || this.ownerState() !== 'yes') return null;
+    return { ...this.vault.counts(), windowDays: VAULT_WINDOW_DAYS, perChat: VAULT_PER_CHAT };
+  }
+
+  private requireOwner(): void {
+    if (this.ownerState() !== 'yes')
+      throw new HttpError(403, 'not_owner', '"Mi vista" solo está disponible para tu número');
+  }
+
+  /** guarda en la bóveda lo que llegue, si corresponde */
+  private captureMessages(messages: Parameters<MessageVault['add']>[0]): void {
+    const owner = this.ownerState();
+    if (owner === 'no') {
+      if (this.vault.size) this.vault.clear();
+      return;
+    }
+    if (this.vault.add(messages) > 0) this.scheduleVaultPersist();
+  }
+
+  private scheduleVaultPersist(): void {
+    if (this.vaultTimer) return;
+    this.vaultTimer = setTimeout(() => {
+      this.vaultTimer = null;
+      void this.persistVault();
+    }, VAULT_PERSIST_MS);
+    this.vaultTimer.unref?.();
+  }
+
+  private async persistVault(): Promise<void> {
+    if (this.disposed || this.loggingOut || !this.record.linked) return;
+    if (this.ownerState() !== 'yes') {
+      // aún no sabemos el número: reintentamos después
+      if (this.ownerState() === 'unknown' && this.vault.size) this.scheduleVaultPersist();
+      return;
+    }
+    if (this.stats.summary().state === 'complete') this.vault.prune();
+    const entries = this.vault.takeDirty();
+    const keys = Object.keys(entries);
+    if (!keys.length) return;
+    try {
+      await this.deps.store.writeAuth(this.id, entries);
+      this.touch();
+    } catch (err) {
+      this.vault.markDirty(keys);
+      this.log.error({ err }, 'no se pudieron guardar los mensajes de "Mi vista"');
+      this.scheduleVaultPersist();
+    }
+  }
+
+  private async loadVault(): Promise<void> {
+    if (this.vaultLoaded) return;
+    this.vaultLoaded = true;
+    if (!this.deps.ownerPhone) return;
+    try {
+      const keys = await this.deps.store.listAuthKeys(this.id, VAULT_KEY_PREFIX);
+      if (!keys.length) return;
+      this.vault.load(await this.deps.store.readAuth(this.id, keys));
+      this.log.info({ chats: this.vault.size }, 'mensajes de "Mi vista" cargados');
+    } catch (err) {
+      this.log.warn({ err }, 'no se pudieron cargar los mensajes de "Mi vista"');
+    }
+  }
+
+  private resetVault(): void {
+    this.vault = new MessageVault((v) => JSON.stringify(v, BufferJSON.replacer));
+    this.vaultLoaded = true;
+    if (this.vaultTimer) clearTimeout(this.vaultTimer);
+    this.vaultTimer = null;
+    this.mediaCache.clear();
+    this.mediaCacheBytes = 0;
+  }
+
+  /** chats de la bóveda unificados por contacto (LID y número = el mismo chat) */
+  private mergedVault(): Map<string, { jids: string[]; messages: StoredMessage[] }> {
+    const out = new Map<string, { jids: string[]; messages: StoredMessage[] }>();
+    for (const [jid, list] of this.vault.entries()) {
+      const key = this.stats.canonicalJid(jid);
+      const cur = out.get(key) ?? { jids: [], messages: [] };
+      cur.jids.push(jid);
+      cur.messages.push(...list);
+      out.set(key, cur);
+    }
+    for (const v of out.values()) {
+      v.messages.sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
+      if (v.messages.length > VAULT_PER_CHAT) v.messages = v.messages.slice(-VAULT_PER_CHAT);
+    }
+    return out;
+  }
+
+  private async names() {
+    const dir = await this.directory();
+    return {
+      people: new Map(dir.people.map((p) => [p.jid, p])),
+      groups: new Map(dir.groups.map((g) => [g.jid, g.name])),
+    };
+  }
+
+  private toChat(
+    jid: string,
+    messages: StoredMessage[],
+    names: Awaited<ReturnType<WaSession['names']>>,
+  ): PersonalChat {
+    const group = isGroupJid(jid);
+    const last = messages[messages.length - 1]!;
+    const me = this.record.profile;
+    const isSelf = !group && (jid === me?.jid || (me?.lid ? jid === me.lid : false));
+    const phone = group ? null : phoneOf(jid);
+    let name: string | null;
+    if (group) name = names.groups.get(jid) ?? 'Grupo sin nombre';
+    else if (isSelf) name = `${me?.name ?? 'Tú'} (tú)`;
+    else
+      name =
+        names.people.get(jid)?.displayName ??
+        [...messages].reverse().find((m) => !m.fromMe && m.pushName)?.pushName ??
+        (phone ? prettyPhone(phone) : 'Contacto sin número');
+    return {
+      jid,
+      name,
+      phone,
+      isGroup: group,
+      isSelf,
+      lastMessageAt: last.ts,
+      preview: last.text,
+      previewKind: last.kind,
+      previewFromMe: last.fromMe,
+      previewSender: group && !last.fromMe ? this.senderName(last, names) : null,
+      stored: messages.length,
+    };
+  }
+
+  private senderName(m: StoredMessage, names: Awaited<ReturnType<WaSession['names']>>) {
+    if (m.fromMe) return 'Tú';
+    if (!m.sender) return null;
+    const key = this.stats.canonicalJid(m.sender);
+    const alt = m.senderAlt ? this.stats.canonicalJid(m.senderAlt) : null;
+    return (
+      names.people.get(key)?.displayName ??
+      (alt ? names.people.get(alt)?.displayName : null) ??
+      m.pushName ??
+      null
+    );
+  }
+
+  /** chats de "Mi vista": con actividad en la ventana, del más reciente al más antiguo */
+  async personalChats(now = Date.now()): Promise<PersonalChatList> {
+    this.requireOwner();
+    const cutoff = now - VAULT_WINDOW_MS;
+    const names = await this.names();
+    const items: PersonalChat[] = [];
+    for (const [jid, v] of this.mergedVault()) {
+      const last = v.messages[v.messages.length - 1];
+      if (!last || last.ts < cutoff) continue;
+      items.push(this.toChat(jid, v.messages, names));
+    }
+    items.sort((a, b) => b.lastMessageAt - a.lastMessageAt);
+    const groups = items.filter((c) => c.isGroup).length;
+    let messages = 0;
+    for (const c of items) messages += c.stored;
+    return {
+      items,
+      groups,
+      individual: items.length - groups,
+      chats: items.length,
+      messages,
+      windowDays: VAULT_WINDOW_DAYS,
+      perChat: VAULT_PER_CHAT,
+    };
+  }
+
+  /** últimos mensajes de un chat (de más antiguo a más nuevo) */
+  async personalMessages(chatJid: string): Promise<PersonalChatMessages> {
+    this.requireOwner();
+    const key = this.stats.canonicalJid(chatJid);
+    const v = this.mergedVault().get(key);
+    if (!v?.messages.length) throw new HttpError(404, 'chat_not_found', 'Chat no encontrado');
+    const names = await this.names();
+    const group = isGroupJid(key);
+    const messages: ChatMessage[] = v.messages.map((m) => {
+      const sender = m.sender ? this.stats.canonicalJid(m.sender) : null;
+      return {
+        id: m.id,
+        fromMe: m.fromMe,
+        timestamp: m.ts,
+        kind: m.kind,
+        text: m.text,
+        senderJid: group ? sender : null,
+        senderName: group ? this.senderName(m, names) : null,
+        senderPhone: group ? (phoneOf(sender) ?? phoneOf(m.senderAlt ?? null)) : null,
+        media: m.media,
+        location: m.location ?? null,
+        ...(m.edited ? { edited: true } : {}),
+      };
+    });
+    return { chat: this.toChat(key, v.messages, names), messages };
+  }
+
+  /** media de un mensaje guardado; si ya no se puede bajar, su miniatura */
+  async personalMedia(
+    chatJid: string,
+    messageId: string,
+  ): Promise<{ buffer: Buffer; mimetype: string; thumbnail: boolean }> {
+    this.requireOwner();
+    const key = this.stats.canonicalJid(chatJid);
+    const msg = this.mergedVault()
+      .get(key)
+      ?.messages.find((m) => m.id === messageId);
+    if (!msg?.raw) throw new HttpError(404, 'media_not_found', 'Este mensaje no tiene media');
+    const cacheKey = `${key}|${messageId}`;
+    const cached = this.mediaCache.get(cacheKey);
+    if (cached) return cached;
+
+    const parsed = JSON.parse(msg.raw, BufferJSON.reviver) as { message?: object };
+    let result: { buffer: Buffer; mimetype: string; thumbnail: boolean } | null = null;
+    if (this.deps.downloadMedia) {
+      try {
+        const buffer = await withTimeout(this.deps.downloadMedia(parsed), 30_000);
+        result = {
+          buffer,
+          mimetype: msg.media?.mimetype ?? 'application/octet-stream',
+          thumbnail: false,
+        };
+      } catch (err) {
+        this.log.info({ err: errorMessage(err), kind: msg.kind }, 'media no disponible');
+      }
+    }
+    if (!result) {
+      const inner = unwrapMessage(parsed.message) as Record<string, Record<string, unknown>> | null;
+      const content = inner
+        ? (inner.imageMessage ??
+          inner.videoMessage ??
+          inner.stickerMessage ??
+          inner.documentMessage)
+        : undefined;
+      const thumb = content?.jpegThumbnail;
+      const buf =
+        typeof thumb === 'string'
+          ? Buffer.from(thumb, 'base64')
+          : thumb instanceof Uint8Array
+            ? Buffer.from(thumb)
+            : null;
+      if (!buf?.length)
+        throw new HttpError(410, 'media_expired', 'WhatsApp ya no tiene este archivo');
+      result = { buffer: buf, mimetype: 'image/jpeg', thumbnail: true };
+    }
+    this.cacheMedia(cacheKey, result);
+    return result;
+  }
+
+  private cacheMedia(key: string, value: { buffer: Buffer; mimetype: string; thumbnail: boolean }) {
+    if (value.buffer.length > MEDIA_CACHE_BYTES / 4) return;
+    this.mediaCache.set(key, value);
+    this.mediaCacheBytes += value.buffer.length;
+    for (const [k, v] of this.mediaCache) {
+      if (this.mediaCacheBytes <= MEDIA_CACHE_BYTES) break;
+      this.mediaCache.delete(k);
+      this.mediaCacheBytes -= v.buffer.length;
+    }
   }
 
   // ------------------------------------------------------------------ acciones
@@ -166,9 +476,10 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       this.qr = null;
       // puede ser otro teléfono: las estadísticas parten de cero
       this.stats = new StatsAggregator();
+      this.resetVault();
       this.record.profile = null;
       this.record.connectedAt = null;
-    }
+    } else await this.loadVault();
     this.attempts = 0;
     this.setStatus(this.record.linked ? 'connecting' : 'starting', { lastError: null });
     await this.openSocket();
@@ -181,6 +492,9 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     this.clearIdleTimer();
     this.closeSocket();
     await this.credsChain.catch(() => {});
+    if (this.vaultTimer) clearTimeout(this.vaultTimer);
+    this.vaultTimer = null;
+    await this.persistVault();
     await this.flush();
   }
 
@@ -211,6 +525,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     }
     this.closeSocket();
     await this.credsChain.catch(() => {});
+    this.resetVault();
     await this.deps.store.clearAuth(this.id);
     this.qr = null;
     this.record.linked = false;
@@ -296,6 +611,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
         syncType: h.syncType ?? null,
         isLatest: h.isLatest ?? null,
       });
+      this.captureMessages(h.messages);
       this.log.info(
         {
           chats: h.chats.length,
@@ -329,6 +645,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     });
     on('messages.upsert', ({ messages }) => {
       this.stats.addMessages(messages);
+      this.captureMessages(messages);
       this.touch();
     });
     on('lid-mapping.update', (m) => {
@@ -448,6 +765,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     this.clearIdleTimer();
     this.qr = null;
     this.record.linked = false;
+    if (this.deps.wipeOnLogout) this.resetVault();
     if (this.deps.wipeOnLogout) {
       await this.credsChain.catch(() => {});
       await this.deps.store
@@ -574,8 +892,10 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     this.clearIdleTimer();
     if (this.persistTimer) clearTimeout(this.persistTimer);
     if (this.emitTimer) clearTimeout(this.emitTimer);
+    if (this.vaultTimer) clearTimeout(this.vaultTimer);
     this.persistTimer = null;
     this.emitTimer = null;
+    this.vaultTimer = null;
     this.removeAllListeners();
   }
 
@@ -637,4 +957,11 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
       },
     );
   });
+}
+
+/** 56912345678 → +56 9 1234 5678 */
+function prettyPhone(phone: string): string {
+  const d = phone.replace(/\D/g, '');
+  if (d.length === 11 && d.startsWith('569')) return `+56 9 ${d.slice(3, 7)} ${d.slice(7)}`;
+  return `+${d}`;
 }

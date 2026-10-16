@@ -1,6 +1,15 @@
-import { useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
-import { ArrowLeft, RefreshCw, Trash2, TriangleAlert, Unplug, WifiOff } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import {
+  ArrowLeft,
+  LayoutDashboard,
+  MessagesSquare,
+  RefreshCw,
+  Trash2,
+  TriangleAlert,
+  Unplug,
+  WifiOff,
+} from 'lucide-react';
 import type { SessionSummary } from '@wa-bridge/shared';
 import { useAuth } from '../hooks/auth';
 import { useSessionStream } from '../hooks/streams';
@@ -8,6 +17,7 @@ import { api } from '../lib/api';
 import { AppShell, Dialog, Spinner, StatusBadge } from '../components/ui';
 import { Dashboard } from '../components/Dashboard';
 import { LinkView } from '../components/LinkView';
+import { MyView } from '../components/MyView';
 
 type Confirm = 'logout' | 'delete' | null;
 
@@ -20,6 +30,7 @@ export function SessionPage() {
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [error, setError] = useState<string | null>(null);
+  const [params, setParams] = useSearchParams();
 
   async function run(fn: () => Promise<SessionSummary | void>) {
     setBusy(true);
@@ -57,6 +68,18 @@ export function SessionPage() {
     );
   }
 
+  // "Mi vista" solo existe para el WhatsApp del dueño; por defecto se abre ahí
+  const tab: 'general' | 'mia' =
+    session.personal && params.get('vista') !== 'general' ? 'mia' : 'general';
+  const setTab = (t: 'general' | 'mia') =>
+    setParams(
+      (p) => {
+        p.set('vista', t);
+        return p;
+      },
+      { replace: true },
+    );
+
   const linkedView =
     ['connected', 'reconnecting'].includes(session.status) ||
     (session.profile !== null && ['connecting', 'error', 'logged_out'].includes(session.status));
@@ -93,7 +116,12 @@ export function SessionPage() {
             busy={busy}
             onReconnect={() => void run(() => api.connect(id))}
           />
-          <Dashboard session={session} onDisconnect={() => setConfirm('logout')} />
+          {session.personal && <Tabs tab={tab} onChange={setTab} />}
+          {tab === 'mia' ? (
+            <MyView session={session} />
+          ) : (
+            <Dashboard session={session} onDisconnect={() => setConfirm('logout')} />
+          )}
         </>
       ) : (
         <LinkView
@@ -212,4 +240,34 @@ function StatusNotice({
     );
   }
   return null;
+}
+
+function Tabs({
+  tab,
+  onChange,
+}: {
+  tab: 'general' | 'mia';
+  onChange: (t: 'general' | 'mia') => void;
+}) {
+  const item = (key: 'general' | 'mia', label: string, icon: ReactNode) => (
+    <button
+      role="tab"
+      aria-selected={tab === key}
+      onClick={() => onChange(key)}
+      className={`-mb-px inline-flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-bold transition ${
+        tab === key
+          ? 'border-violeta text-violeta'
+          : 'border-transparent text-ink-soft hover:text-ink'
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+  return (
+    <div role="tablist" className="mb-5 flex gap-1 border-b border-line">
+      {item('mia', 'Mi vista', <MessagesSquare className="size-4" />)}
+      {item('general', 'General', <LayoutDashboard className="size-4" />)}
+    </div>
+  );
 }

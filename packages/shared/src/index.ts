@@ -118,8 +118,97 @@ export interface SessionSummary {
   profile: WaProfile | null;
   stats: SyncStats;
   lastError: string | null;
+  /**
+   * Solo si el WhatsApp vinculado es el del dueño (OWNER_PHONE): cuántos chats y
+   * mensajes hay guardados para "Mi vista". null para cualquier otro número.
+   */
+  personal: PersonalVaultInfo | null;
   /** siempre true: este servicio nunca envía mensajes */
   readOnly: true;
+}
+
+// ------------------------------------------------------------- Mi vista (solo el dueño)
+
+export interface PersonalVaultInfo {
+  /** chats con actividad dentro de la ventana */
+  chats: number;
+  /** mensajes guardados en esos chats */
+  messages: number;
+  /** ventana de días que se muestra */
+  windowDays: number;
+  /** máximo de mensajes guardados por chat */
+  perChat: number;
+}
+
+export type MessageKind =
+  | 'text'
+  | 'image'
+  | 'video'
+  | 'gif'
+  | 'audio'
+  | 'voice'
+  | 'sticker'
+  | 'document'
+  | 'location'
+  | 'contact'
+  | 'poll'
+  | 'deleted'
+  | 'other';
+
+export interface ChatMedia {
+  mimetype: string | null;
+  fileName?: string | null;
+  /** duración de audios y videos */
+  seconds?: number | null;
+  width?: number | null;
+  height?: number | null;
+  /** bytes */
+  size?: number | null;
+}
+
+export interface ChatMessage {
+  id: string;
+  fromMe: boolean;
+  /** epoch ms */
+  timestamp: number;
+  kind: MessageKind;
+  /** texto del mensaje o pie de foto */
+  text: string | null;
+  /** autor (en grupos) */
+  senderJid: string | null;
+  senderName: string | null;
+  senderPhone: string | null;
+  media: ChatMedia | null;
+  /** coordenadas, si es una ubicación */
+  location?: { lat: number; lng: number; name?: string | null } | null;
+  edited?: boolean;
+}
+
+export interface PersonalChat {
+  jid: string;
+  name: string;
+  phone: string | null;
+  isGroup: boolean;
+  /** chat contigo mismo */
+  isSelf: boolean;
+  lastMessageAt: number;
+  preview: string | null;
+  previewKind: MessageKind;
+  previewFromMe: boolean;
+  previewSender: string | null;
+  /** mensajes guardados (máx. perChat) */
+  stored: number;
+}
+
+export interface PersonalChatList extends PersonalVaultInfo {
+  items: PersonalChat[];
+  individual: number;
+  groups: number;
+}
+
+export interface PersonalChatMessages {
+  chat: PersonalChat;
+  messages: ChatMessage[];
 }
 
 export interface CreateSessionBody {
