@@ -1,6 +1,6 @@
 {
   "name": "@wa-bridge/mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Conector MCP (extensión .mcpb) para que Claude lea, busque y —con confirmación— envíe en el WhatsApp del dueño a través del WA Bridge local",

@@ -249,4 +249,83 @@ describe('Mi vista', () => {
     });
     expect(nope.statusCode).toBe(404);
   });
+
+  it('envía fotos y documentos, los guarda y se pueden ver de vuelta', async () => {
+    const { app, id } = await setup('56912345678', { allowSend: true });
+    const items = (
+      (
+        await app.inject({ url: `/sessions/${id}/personal/chats`, headers: auth })
+      ).json() as PersonalChatList
+    ).items;
+    const [a, b] = items;
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const url = (jid: string) =>
+      `/sessions/${id}/personal/chats/${encodeURIComponent(jid)}/send-media`;
+
+    const r = await app.inject({
+      method: 'POST',
+      url: url(a!.jid),
+      headers: auth,
+      payload: {
+        data: png.toString('base64'),
+        mimetype: 'image/png',
+        fileName: 'foto.png',
+        caption: 'Mira esto',
+      },
+    });
+    expect(r.statusCode).toBe(200);
+    const msg = r.json().message as { id: string; kind: string; text: string };
+    expect(msg).toMatchObject({ kind: 'image', text: 'Mira esto' });
+    const media = await app.inject({
+      url: `/sessions/${id}/personal/chats/${encodeURIComponent(a!.jid)}/media/${msg.id}`,
+      headers: auth,
+    });
+    expect(media.statusCode).toBe(200);
+    expect(media.rawPayload.equals(png)).toBe(true);
+
+    // un PDF va como documento con su nombre (sin rutas)
+    const d = await app.inject({
+      method: 'POST',
+      url: url(b!.jid),
+      headers: auth,
+      payload: {
+        data: Buffer.from('%PDF-1.4 hola').toString('base64'),
+        mimetype: 'application/pdf',
+        fileName: '../../secreto/propuesta.pdf',
+      },
+    });
+    expect(d.statusCode).toBe(200);
+    expect(d.json().message).toMatchObject({
+      kind: 'document',
+      media: { fileName: 'propuesta.pdf', mimetype: 'application/pdf' },
+    });
+
+    // misma foto como documento y freno al mismo chat
+    const again = await app.inject({
+      method: 'POST',
+      url: url(a!.jid),
+      headers: auth,
+      payload: { data: png.toString('base64'), mimetype: 'image/png', fileName: 'x.png' },
+    });
+    expect(again.statusCode).toBe(429);
+  });
+
+  it('no envía archivos vacíos ni sin ALLOW_SEND', async () => {
+    const { app, id } = await setup('56912345678');
+    const c = (
+      (
+        await app.inject({ url: `/sessions/${id}/personal/chats`, headers: auth })
+      ).json() as PersonalChatList
+    ).items[0]!;
+    const r = await app.inject({
+      method: 'POST',
+      url: `/sessions/${id}/personal/chats/${encodeURIComponent(c.jid)}/send-media`,
+      headers: auth,
+      payload: { data: Buffer.from('hola').toString('base64'), mimetype: 'text/plain' },
+    });
+    expect(r.statusCode).toBe(403);
+  });
 });

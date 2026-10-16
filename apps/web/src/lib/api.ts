@@ -1,4 +1,9 @@
-import type { PersonalChatList, PersonalChatMessages, SessionSummary } from '@wa-bridge/shared';
+import type {
+  PersonalChatList,
+  PersonalChatMessages,
+  SendResult,
+  SessionSummary,
+} from '@wa-bridge/shared';
 import { storage } from './storage';
 import { supabase } from './supabase';
 
@@ -106,7 +111,42 @@ export const api = {
     request<PersonalChatMessages>(
       `/sessions/${id}/personal/chats/${encodeURIComponent(jid)}/messages`,
     ),
+  /** Mi vista: envía un texto desde tu número (con límites) */
+  sendText: (id: string, jid: string, text: string) =>
+    request<SendResult>(`/sessions/${id}/personal/chats/${encodeURIComponent(jid)}/send`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
+  /** Mi vista: envía una foto, video, audio o documento (máx. 16 MB) */
+  sendFile: async (
+    id: string,
+    jid: string,
+    file: File,
+    opts: { caption?: string; asDocument?: boolean } = {},
+  ) =>
+    request<SendResult>(`/sessions/${id}/personal/chats/${encodeURIComponent(jid)}/send-media`, {
+      method: 'POST',
+      body: JSON.stringify({
+        data: await fileToBase64(file),
+        mimetype: file.type || 'application/octet-stream',
+        fileName: file.name,
+        caption: opts.caption || null,
+        asDocument: Boolean(opts.asDocument),
+      }),
+    }),
 };
+
+/** máximo que se puede enviar (igual que la API) */
+export const MAX_SEND_BYTES = 16 * 1024 * 1024;
+
+function fileToBase64(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).replace(/^data:[^,]*,/, ''));
+    r.onerror = () => reject(new Error('No se pudo leer el archivo'));
+    r.readAsDataURL(file);
+  });
+}
 
 export interface MediaBlob {
   url: string;

@@ -65,7 +65,7 @@ export class BridgeClient {
 
   constructor(private readonly cfg: BridgeConfig) {}
 
-  private async req<T>(path: string, init: RequestInit = {}): Promise<T> {
+  private async req<T>(path: string, init: RequestInit = {}, timeoutMs = 30_000): Promise<T> {
     let res: Response;
     try {
       res = await fetch(`${this.cfg.url}${path}`, {
@@ -74,7 +74,7 @@ export class BridgeClient {
           ...(init.body ? { 'content-type': 'application/json' } : {}),
           ...(this.cfg.token ? { authorization: `Bearer ${this.cfg.token}` } : {}),
         },
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch {
       throw new BridgeError(OFFLINE);
@@ -129,12 +129,77 @@ export class BridgeClient {
     return this.req(`/sessions/${await this.sid()}/personal/search?${q}`);
   }
 
+  async sendFile(
+    jid: string,
+    file: { data: Buffer; mimetype: string; fileName: string },
+    opts: { caption?: string | null; asDocument?: boolean } = {},
+  ): Promise<SendResult> {
+    return this.req(
+      `/sessions/${await this.sid()}/personal/chats/${encodeURIComponent(jid)}/send-media`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          data: file.data.toString('base64'),
+          mimetype: file.mimetype,
+          fileName: file.fileName,
+          caption: opts.caption ?? null,
+          asDocument: Boolean(opts.asDocument),
+        }),
+      },
+      120_000,
+    );
+  }
+
   async send(jid: string, text: string): Promise<SendResult> {
     return this.req(
       `/sessions/${await this.sid()}/personal/chats/${encodeURIComponent(jid)}/send`,
       { method: 'POST', body: JSON.stringify({ text }) },
     );
   }
+}
+
+/** tipo MIME por extensión (lo que se manda seguido por WhatsApp) */
+const MIME: Record<string, string> = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  heic: 'image/heic',
+  mp4: 'video/mp4',
+  mov: 'video/quicktime',
+  '3gp': 'video/3gpp',
+  mp3: 'audio/mpeg',
+  m4a: 'audio/mp4',
+  ogg: 'audio/ogg',
+  opus: 'audio/ogg',
+  aac: 'audio/aac',
+  wav: 'audio/wav',
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  csv: 'text/csv',
+  txt: 'text/plain',
+  zip: 'application/zip',
+  json: 'application/json',
+  html: 'text/html',
+};
+
+export function mimeFor(path: string): string {
+  const ext = /\.([a-z0-9]{1,5})$/i.exec(path)?.[1]?.toLowerCase() ?? '';
+  return MIME[ext] ?? 'application/octet-stream';
+}
+
+/** expande ~ y exige ruta absoluta (el conector corre en el Mac del dueño) */
+export function resolveLocalPath(path: string, home = process.env.HOME ?? ''): string {
+  const p = path.trim().replace(/^~(?=\/|$)/, home);
+  if (!p.startsWith('/'))
+    throw new BridgeError('La ruta del archivo debe ser absoluta (o empezar con ~)');
+  return p;
 }
 
 export const JID_RE = /^[\w.-]{3,64}@(s\.whatsapp\.net|lid|g\.us)$/;

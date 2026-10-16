@@ -18,7 +18,7 @@ import type {
 } from '@wa-bridge/shared';
 import type { SessionRecord, SessionStore } from '../store/types.js';
 import { loadAuthState, type StoredAuthState } from '../wa/auth-state.js';
-import type { MediaDownloader, SocketFactory, WaSocketLike } from '../wa/types.js';
+import type { MediaDownloader, OutgoingMedia, SocketFactory, WaSocketLike } from '../wa/types.js';
 import { HttpError } from './errors.js';
 import {
   MessageVault,
@@ -475,13 +475,66 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
    * ya existen en la bóveda y con límites por minuto/hora/día. El log no guarda el texto.
    */
   async sendPersonal(chatJid: string, text: string, now = Date.now()): Promise<SendResult> {
-    this.requireOwner();
-    if (!this.deps.allowSend)
-      throw new HttpError(403, 'send_disabled', 'El envío no está habilitado (ALLOW_SEND)');
     const body = text.trim();
     if (!body) throw new HttpError(400, 'bad_request', 'El mensaje está vacío');
     if (body.length > 4096)
       throw new HttpError(400, 'bad_request', 'El mensaje es muy largo (máx. 4096)');
+    const { key, sock } = this.prepareSend(chatJid, now);
+    if (!sock.sendText)
+      throw new HttpError(409, 'not_connected', 'WhatsApp no está conectado ahora');
+    const sent = await this.deliver(key, () => sock.sendText!(key, body));
+    this.log.info({ chat: key, chars: body.length }, 'mensaje enviado por el dueño');
+    return this.storeSent(key, sent, { conversation: body }, now);
+  }
+
+  /**
+   * Envía una foto, video, audio o documento (mismas reglas que el texto). El log
+   * guarda el tipo y el tamaño, nunca el contenido ni el nombre del archivo.
+   */
+  async sendPersonalMedia(
+    chatJid: string,
+    input: {
+      data: Buffer;
+      mimetype: string;
+      fileName: string;
+      caption?: string | null;
+      asDocument?: boolean;
+    },
+    now = Date.now(),
+  ): Promise<SendResult> {
+    if (!input.data.length) throw new HttpError(400, 'bad_request', 'El archivo está vacío');
+    if (input.data.length > MAX_SEND_BYTES)
+      throw new HttpError(
+        413,
+        'too_large',
+        `El archivo pesa más de ${MAX_SEND_BYTES / 1024 / 1024} MB, el máximo que se puede enviar`,
+      );
+    const caption = input.caption?.trim() || undefined;
+    if (caption && caption.length > 1024)
+      throw new HttpError(400, 'bad_request', 'El texto del archivo es muy largo (máx. 1024)');
+    const media: OutgoingMedia = {
+      kind: input.asDocument ? 'document' : mediaKindFor(input.mimetype),
+      data: input.data,
+      mimetype: input.mimetype || 'application/octet-stream',
+      fileName: cleanFileName(input.fileName),
+      caption,
+    };
+    const { key, sock } = this.prepareSend(chatJid, now);
+    if (!sock.sendMedia)
+      throw new HttpError(409, 'not_connected', 'WhatsApp no está conectado ahora');
+    const sent = await this.deliver(key, () => sock.sendMedia!(key, media), 90_000);
+    this.log.info(
+      { chat: key, kind: media.kind, bytes: media.data.length, mimetype: media.mimetype },
+      'archivo enviado por el dueño',
+    );
+    return this.storeSent(key, sent, null, now);
+  }
+
+  /** reglas comunes de envío: dueño, ALLOW_SEND, chat existente, conectado y frenos */
+  private prepareSend(chatJid: string, now: number): { key: string; sock: WaSocketLike } {
+    this.requireOwner();
+    if (!this.deps.allowSend)
+      throw new HttpError(403, 'send_disabled', 'El envío no está habilitado (ALLOW_SEND)');
     const key = this.stats.canonicalJid(chatJid);
     const v = this.mergedVault().get(key);
     if (!v?.messages.length)
@@ -491,34 +544,49 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
         'Solo se puede escribir a chats con conversación en los últimos 90 días',
       );
     const sock = this.sock;
-    if (!sock?.sendText || this.record.status !== 'connected')
+    if (!sock || this.record.status !== 'connected')
       throw new HttpError(409, 'not_connected', 'WhatsApp no está conectado ahora');
     const wait = this.sendLimiter.check(key, now);
     if (wait) throw new HttpError(429, 'rate_limited', wait);
-
     this.sendLimiter.record(key, now);
-    let sent: unknown;
+    return { key, sock };
+  }
+
+  private async deliver(key: string, send: () => Promise<unknown>, ms = 20_000): Promise<unknown> {
     try {
-      sent = await withTimeout(sock.sendText(key, body), 20_000);
+      return await withTimeout(send(), ms);
     } catch (err) {
       this.log.warn({ chat: key, err: errorMessage(err) }, 'no se pudo enviar el mensaje');
       throw new HttpError(502, 'send_failed', `WhatsApp no aceptó el envío: ${errorMessage(err)}`);
     }
-    this.log.info({ chat: key, chars: body.length }, 'mensaje enviado por el dueño');
-    const fallback = {
-      key: { id: `OUT${now}`, remoteJid: key, fromMe: true },
-      message: { conversation: body },
-      messageTimestamp: Math.floor(now / 1000),
-    };
-    const msg = (sent && typeof sent === 'object' && 'key' in sent ? sent : fallback) as Parameters<
-      MessageVault['add']
-    >[0][number];
-    this.vault.add([msg]);
-    this.scheduleVaultPersist();
+  }
+
+  /** guarda lo enviado en la bóveda y arma la respuesta */
+  private async storeSent(
+    key: string,
+    sent: unknown,
+    fallbackMessage: { conversation: string } | null,
+    now: number,
+  ): Promise<SendResult> {
+    const ok = sent && typeof sent === 'object' && 'key' in sent;
+    if (ok || fallbackMessage) {
+      const msg = (
+        ok
+          ? sent
+          : {
+              key: { id: `OUT${now}`, remoteJid: key, fromMe: true },
+              message: fallbackMessage,
+              messageTimestamp: Math.floor(now / 1000),
+            }
+      ) as Parameters<MessageVault['add']>[0][number];
+      this.vault.add([msg]);
+      this.scheduleVaultPersist();
+    }
     this.touch();
     const names = await this.names();
     const list = this.mergedVault().get(key)?.messages ?? [];
-    const stored = list.find((m) => m.id === msg.key?.id) ?? list[list.length - 1]!;
+    const sentId = ok ? (sent as { key?: { id?: string } }).key?.id : `OUT${now}`;
+    const stored = list.find((m) => m.id === sentId) ?? list[list.length - 1]!;
     const c = this.toChat(key, list, names);
     return {
       chat: { jid: c.jid, name: c.name, isGroup: c.isGroup, phone: c.phone },
@@ -1075,6 +1143,29 @@ function errorMessage(err: unknown): string {
   if (!err) return 'desconocido';
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+/** tope de lo que se puede enviar (WhatsApp comprime fotos y videos sobre ~16 MB) */
+export const MAX_SEND_BYTES = 16 * 1024 * 1024;
+
+/** cómo se manda un archivo según su tipo: lo raro va como documento */
+export function mediaKindFor(mimetype: string): OutgoingMedia['kind'] {
+  const m = mimetype.toLowerCase();
+  // otros formatos (HEIC, GIF, MOV…) WhatsApp no los muestra bien en línea: van como documento
+  if (/^image\/(jpeg|png)$/.test(m)) return 'image';
+  if (/^video\/(mp4|3gpp)$/.test(m)) return 'video';
+  if (/^audio\/(ogg|mpeg|mp4|aac|amr|x-m4a|mp3)/.test(m)) return 'audio';
+  return 'document';
+}
+
+/** nombre de archivo sin rutas ni caracteres de control */
+export function cleanFileName(name: string): string {
+  const base = [...(name.split(/[\\/]/).pop() ?? '')]
+    .filter((ch) => ch.charCodeAt(0) >= 32 && ch.charCodeAt(0) !== 127)
+    .join('')
+    .trim()
+    .slice(0, 120);
+  return base || 'archivo';
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {

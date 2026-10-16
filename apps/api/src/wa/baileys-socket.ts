@@ -3,13 +3,14 @@ import makeWASocket, {
   downloadMediaMessage,
   fetchLatestWaWebVersion,
   makeCacheableSignalKeyStore,
+  type AnyMessageContent,
   type WAMessage,
   type WAVersion,
 } from 'baileys';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import type { Logger } from 'pino';
 import { enforceReadOnly, ReadOnlyViolation } from './read-only.js';
-import type { MediaDownloader, SocketFactory, WaSocketLike } from './types.js';
+import type { MediaDownloader, OutgoingMedia, SocketFactory, WaSocketLike } from './types.js';
 
 const VERSION_TTL_MS = 6 * 60 * 60 * 1000;
 let cachedVersion: { version: WAVersion; at: number } | null = null;
@@ -75,10 +76,31 @@ export function createBaileysFactory(opts: BaileysFactoryOptions = {}): SocketFa
     const blocked = enforceReadOnly(sock);
     if (original) {
       (sock as unknown as WaSocketLike).sendText = (jid, text) => original(jid, { text });
+      (sock as unknown as WaSocketLike).sendMedia = (jid, m) => original(jid, toContent(m));
     }
     logger.debug({ blocked: blocked.length }, 'candado de solo lectura aplicado');
     return sock as unknown as WaSocketLike;
   };
+}
+
+/** arma el contenido de Baileys para un archivo saliente (sin reenvíos ni menciones) */
+export function toContent(m: OutgoingMedia): AnyMessageContent {
+  const caption = m.caption?.trim() || undefined;
+  switch (m.kind) {
+    case 'image':
+      return { image: m.data, mimetype: m.mimetype, ...(caption ? { caption } : {}) };
+    case 'video':
+      return { video: m.data, mimetype: m.mimetype, ...(caption ? { caption } : {}) };
+    case 'audio':
+      return { audio: m.data, mimetype: m.mimetype };
+    default:
+      return {
+        document: m.data,
+        mimetype: m.mimetype,
+        fileName: m.fileName,
+        ...(caption ? { caption } : {}),
+      };
+  }
 }
 
 /**

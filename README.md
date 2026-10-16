@@ -29,17 +29,21 @@ sesión muestra dos pestañas: **Mi vista** y **General** (la de siempre).
 
 `apps/mcp` es un conector MCP (extensión `.mcpb` para la app de Claude) que llama al
 Bridge de tu Mac. Herramientas: `whatsapp_estado`, `whatsapp_listar_chats`,
-`whatsapp_leer_chat`, `whatsapp_buscar`, `whatsapp_pendientes` y `whatsapp_enviar`.
+`whatsapp_leer_chat`, `whatsapp_buscar`, `whatsapp_pendientes`, `whatsapp_enviar` y
+`whatsapp_enviar_archivo` (fotos o archivos del Mac por su ruta).
 
 - Se instala una vez con doble clic en `WhatsApp-Alejandro.mcpb`. Lee el token y el
   puerto de `apps/api/.env`, así que no hay que pegar nada.
 - Para el asistente se guardan hasta **300 mensajes por chat de los últimos 90 días**
   (cifrados). Mi vista sigue mostrando 30 días y 10 mensajes.
-- **Enviar** solo funciona con `ALLOW_SEND=true` y `OWNER_PHONE`. Es solo texto, solo a
-  chats que ya existen y con frenos: 8 por minuto, 40 por hora, 150 al día y unos
-  segundos entre mensajes al mismo chat. El log no guarda el texto. Claude siempre
+- **Enviar** solo funciona con `ALLOW_SEND=true` y `OWNER_PHONE`. Texto, fotos, videos,
+  audios y documentos (máx. 16 MB; JPG/PNG/MP4 van en línea, lo demás como documento),
+  solo a chats que ya existen y con frenos: 8 por minuto, 40 por hora, 150 al día y unos
+  segundos entre mensajes al mismo chat. El log no guarda el texto ni el archivo. Claude siempre
   muestra el destinatario y el texto y espera tu confirmación. El resto del candado
   sigue cerrado: no marca leído, no cambia presencia, no toca grupos.
+- **Mi vista** tiene caja para escribir: Enter envía, Shift+Enter salto de línea, clip
+  para adjuntar, pegar o arrastrar un archivo, y opción de mandar una foto como documento.
 - Regenerar el conector: `pnpm --filter @wa-bridge/mcp pack` → `apps/mcp/dist/whatsapp-alejandro.mcpb`.
 
 ## Sprint 1 — qué hay

@@ -41,6 +41,15 @@ const SearchQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
 });
 const SendBody = z.object({ text: z.string().min(1).max(4096) });
+/** archivo en base64 (16 MB → ~21,4 MB de texto) */
+const SendMediaBody = z.object({
+  data: z.string().min(1),
+  mimetype: z.string().trim().max(120).default('application/octet-stream'),
+  fileName: z.string().max(255).default('archivo'),
+  caption: z.string().max(1024).nullish(),
+  asDocument: z.boolean().default(false),
+});
+const MEDIA_BODY_LIMIT = 23 * 1024 * 1024;
 const ExportQuery = z.object({ modo: z.enum(['util', 'completo']).default('util') });
 const CreateBody = z.object({ label: z.string().trim().max(80).nullish() }).nullish();
 const HEARTBEAT_MS = 20_000;
@@ -200,6 +209,33 @@ export async function buildServer(deps: ServerDeps) {
       );
       return manager.get(id).sendPersonal(jid, text);
     });
+
+    /** envía una foto, video, audio o documento (mismas reglas y frenos que el texto) */
+    api.post(
+      '/sessions/:id/personal/chats/:jid/send-media',
+      { bodyLimit: MEDIA_BODY_LIMIT },
+      async (req) => {
+        const { id, jid } = ChatParams.parse(req.params);
+        const b = SendMediaBody.parse(req.body ?? {});
+        const data = Buffer.from(b.data, 'base64');
+        req.log.info(
+          {
+            session: id,
+            chat: jid,
+            bytes: data.length,
+            by: req.principal?.email ?? req.principal?.sub,
+          },
+          'envío de archivo pedido por el dueño',
+        );
+        return manager.get(id).sendPersonalMedia(jid, {
+          data,
+          mimetype: b.mimetype,
+          fileName: b.fileName,
+          caption: b.caption ?? null,
+          asDocument: b.asDocument,
+        });
+      },
+    );
 
     /** foto, audio, video, sticker o documento de un mensaje guardado */
     api.get('/sessions/:id/personal/chats/:jid/media/:msgId', async (req, reply) => {

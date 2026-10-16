@@ -28,6 +28,17 @@ export interface WaSocketLike {
    * el mensaje enviado. Todo lo demás del socket sigue bloqueado por el candado.
    */
   sendText?(jid: string, text: string): Promise<unknown>;
+  /** igual que sendText (solo con ALLOW_SEND): foto, video, audio o documento */
+  sendMedia?(jid: string, media: OutgoingMedia): Promise<unknown>;
+}
+
+/** archivo que el dueño manda desde Mi vista o Claude */
+export interface OutgoingMedia {
+  kind: 'image' | 'video' | 'audio' | 'document';
+  data: Buffer;
+  mimetype: string;
+  fileName: string;
+  caption?: string | undefined;
 }
 
 export interface SocketFactoryOptions {

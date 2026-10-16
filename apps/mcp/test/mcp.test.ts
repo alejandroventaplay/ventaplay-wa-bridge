@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PersonalChat } from '@wa-bridge/shared';
-import { normalizePhone, parseEnv, resolveChat } from '../src/bridge.js';
+import { mimeFor, normalizePhone, parseEnv, resolveChat, resolveLocalPath } from '../src/bridge.js';
 import { body, transcript } from '../src/format.js';
 
 const chat = (name: string, extra: Partial<PersonalChat> = {}): PersonalChat => ({
@@ -76,5 +76,15 @@ describe('conector', () => {
     expect(
       body({ kind: 'document', text: 'ver', media: { mimetype: null, fileName: 'a.pdf' } }),
     ).toBe('📄 Documento · a.pdf · ver');
+  });
+
+  it('reconoce archivos y rutas del Mac', () => {
+    expect(mimeFor('/x/Foto.JPG')).toBe('image/jpeg');
+    expect(mimeFor('~/propuesta.pdf')).toBe('application/pdf');
+    expect(mimeFor('/x/sin-extension')).toBe('application/octet-stream');
+    expect(resolveLocalPath('~/Desktop/a.pdf', '/Users/alejandro')).toBe(
+      '/Users/alejandro/Desktop/a.pdf',
+    );
+    expect(() => resolveLocalPath('Desktop/a.pdf', '/Users/alejandro')).toThrow(/absoluta/);
   });
 });

@@ -3,6 +3,7 @@ import type { BaileysEventMap, WABusinessProfile } from 'baileys';
 import type { HistoryBatch } from '../session/stats.js';
 import type {
   MediaDownloader,
+  OutgoingMedia,
   SocketFactory,
   SocketFactoryOptions,
   WaSocketLike,
@@ -126,6 +127,27 @@ class SimSocket implements WaSocketLike {
     };
   }
 
+  async sendMedia(jid: string, media: OutgoingMedia): Promise<unknown> {
+    if (!this.user) throw new Error('no conectado');
+    const base = { mimetype: media.mimetype, fileLength: media.data.length };
+    const caption = media.caption ? { caption: media.caption } : {};
+    const message =
+      media.kind === 'image'
+        ? { imageMessage: { ...base, ...caption, width: 480, height: 320 } }
+        : media.kind === 'video'
+          ? { videoMessage: { ...base, ...caption, seconds: 5 } }
+          : media.kind === 'audio'
+            ? { audioMessage: { ...base, seconds: 5 } }
+            : { documentMessage: { ...base, ...caption, fileName: media.fileName } };
+    const id = `SIMOUT${Date.now().toString(16).toUpperCase()}`;
+    rememberSent(id, media.data);
+    return {
+      key: { id, remoteJid: jid, fromMe: true },
+      message,
+      messageTimestamp: Math.floor(Date.now() / 1000),
+    };
+  }
+
   async profilePictureUrl(): Promise<string | undefined> {
     return undefined;
   }
@@ -213,8 +235,17 @@ export function createSimulator(timing: Partial<Timing> = {}): Simulator {
   };
 }
 
+/** archivos enviados en el simulador, para poder mostrarlos de vuelta (tope chico) */
+const sentMedia = new Map<string, Buffer>();
+function rememberSent(id: string, data: Buffer): void {
+  sentMedia.set(id, data);
+  if (sentMedia.size > 50) sentMedia.delete(sentMedia.keys().next().value!);
+}
+
 /** media falsa: una imagen SVG, un tono WAV o un PDF mínimo */
 function fakeMedia(raw: unknown): Buffer {
+  const sent = sentMedia.get((raw as { key?: { id?: string } } | null)?.key?.id ?? '');
+  if (sent) return sent;
   const m = (raw as { message?: Record<string, { caption?: string }> } | null)?.message ?? {};
   if (m.imageMessage) {
     const label = (m.imageMessage.caption ?? 'Foto').slice(0, 24).replace(/[<&>]/g, '');

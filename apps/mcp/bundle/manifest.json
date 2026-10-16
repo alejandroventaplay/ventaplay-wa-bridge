@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "whatsapp-alejandro",
   "display_name": "WhatsApp de Alejandro",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Lee, busca y resume tu WhatsApp a través del VentaPlay WA Bridge de tu Mac. Enviar exige tu confirmación.",
   "long_description": "Conecta a Claude con el WA Bridge que corre en tu Mac (http://localhost:4010). Herramientas: estado, listar chats, leer chat, buscar, pendientes por responder y enviar (solo con confirmación y con límites). Toma el token del archivo apps/api/.env del Bridge, no hay que pegar nada.",
   "author": {
@@ -54,6 +54,10 @@
     {
       "name": "whatsapp_enviar",
       "description": "Envía un texto (solo con confirmación)"
+    },
+    {
+      "name": "whatsapp_enviar_archivo",
+      "description": "Envía una foto o archivo del Mac (solo con confirmación)"
     }
   ],
   "compatibility": {

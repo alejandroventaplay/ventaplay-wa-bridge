@@ -38,13 +38,15 @@ import {
   fmtTime,
   isSameDay,
 } from '../lib/format';
+import { Composer } from './Composer';
 import { Avatar, Spinner } from './ui';
 
 type Filter = 'people' | 'groups';
 
 /**
  * "Mi vista": tus conversaciones y grupos de los últimos 30 días, con los últimos
- * mensajes de cada uno, al estilo WhatsApp. Solo lectura.
+ * mensajes de cada uno, al estilo WhatsApp. Con ALLOW_SEND puedes escribir y mandar
+ * fotos o archivos (con límites); nunca marca como leído ni te pone "en línea".
  */
 export function MyView({ session }: { session: SessionSummary }) {
   const id = session.id;
@@ -166,7 +168,7 @@ export function MyView({ session }: { session: SessionSummary }) {
               onBack={() => setSelected(null)}
             />
           ) : (
-            <NoChat />
+            <NoChat sendEnabled={Boolean(session.personal?.sendEnabled)} />
           )}
         </section>
       </div>
@@ -287,7 +289,7 @@ function EmptyList({
   );
 }
 
-function NoChat() {
+function NoChat({ sendEnabled }: { sendEnabled: boolean }) {
   return (
     <div className="grid h-full place-items-center bg-[#f0f2f5] p-10 text-center">
       <div className="max-w-sm">
@@ -296,8 +298,9 @@ function NoChat() {
         </span>
         <p className="text-lg font-black">Elige un chat</p>
         <p className="mt-1 text-sm text-ink-soft">
-          Verás sus últimos mensajes. Esta vista es de solo lectura: no envía nada ni marca como
-          leído.
+          {sendEnabled
+            ? 'Verás sus últimos mensajes y podrás responder con texto, fotos o archivos. No marca como leído.'
+            : 'Verás sus últimos mensajes. Esta vista es de solo lectura: no envía nada ni marca como leído.'}
         </p>
       </div>
     </div>
@@ -321,7 +324,16 @@ function ChatPanel({
 }) {
   const [data, setData] = useState<PersonalChatMessages | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [dropped, setDropped] = useState<File | null>(null);
+  const [dragging, setDragging] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
+
+  /** agrega lo recién enviado sin esperar a recargar el chat */
+  function onSent(m: ChatMessage) {
+    setData((d) =>
+      d && !d.messages.some((x) => x.id === m.id) ? { ...d, messages: [...d.messages, m] } : d,
+    );
+  }
 
   useEffect(() => {
     let alive = true;
@@ -360,7 +372,22 @@ function ChatPanel({
 
       <div
         ref={scroller}
-        className="min-h-0 flex-1 overflow-y-auto bg-[#efeae2] px-3 py-4 sm:px-8"
+        onDragOver={(e) => {
+          if (!sendEnabled || !e.dataTransfer.types.includes('Files')) return;
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          if (!sendEnabled) return;
+          e.preventDefault();
+          setDragging(false);
+          const f = e.dataTransfer.files[0];
+          if (f) setDropped(f);
+        }}
+        className={`relative min-h-0 flex-1 overflow-y-auto bg-[#efeae2] px-3 py-4 sm:px-8 ${
+          dragging ? 'ring-4 ring-violeta-60 ring-inset' : ''
+        }`}
         style={{
           backgroundImage:
             'radial-gradient(rgb(69 6 147 / 0.05) 1px, transparent 1px), radial-gradient(rgb(8 200 167 / 0.05) 1px, transparent 1px)',
@@ -408,14 +435,16 @@ function ChatPanel({
         )}
       </div>
 
-      <footer className="flex items-center gap-2 border-t border-line bg-[#f0f2f5] px-4 py-3 text-sm text-ink-soft">
-        <Smile className="size-5 opacity-50" />
-        <span className="flex-1 rounded-lg bg-white px-3 py-2 text-ink-soft/80">
-          {chat.isGroup || !sendEnabled
-            ? 'Solo lectura · desde aquí no se envían mensajes'
-            : 'Para responder, pídeselo a Claude: te muestra el texto y espera tu OK'}
-        </span>
-      </footer>
+      {sendEnabled ? (
+        <Composer sessionId={sessionId} chatJid={chat.jid} onSent={onSent} dropped={dropped} />
+      ) : (
+        <footer className="flex items-center gap-2 border-t border-line bg-[#f0f2f5] px-4 py-3 text-sm text-ink-soft">
+          <Smile className="size-5 opacity-50" />
+          <span className="flex-1 rounded-lg bg-white px-3 py-2 text-ink-soft/80">
+            Solo lectura · el envío no está habilitado en este equipo
+          </span>
+        </footer>
+      )}
     </>
   );
 }

@@ -2,7 +2,16 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import type { PersonalChat } from '@wa-bridge/shared';
-import { BridgeClient, BridgeError, loadConfig, resolveChat } from './bridge.js';
+import { readFile, stat } from 'node:fs/promises';
+import { basename } from 'node:path';
+import {
+  BridgeClient,
+  BridgeError,
+  loadConfig,
+  mimeFor,
+  resolveChat,
+  resolveLocalPath,
+} from './bridge.js';
 import { author, body, chatLine, chatTitle, phone, transcript, when } from './format.js';
 
 /**
@@ -10,7 +19,7 @@ import { author, body, chatLine, chatTitle, phone, transcript, when } from './fo
  * del dueño a través del WA Bridge que corre en su Mac. Enviar exige confirmación.
  */
 const client = new BridgeClient(await loadConfig());
-const server = new McpServer({ name: 'whatsapp-alejandro', version: '0.1.0' });
+const server = new McpServer({ name: 'whatsapp-alejandro', version: '0.2.0' });
 
 type Text = { content: { type: 'text'; text: string }[]; isError?: boolean };
 const text = (t: string): Text => ({ content: [{ type: 'text', text: t }] });
@@ -219,6 +228,57 @@ server.registerTool(
         return `Vista previa (NO enviado):\nPara: ${chatTitle(c)}\nTexto:\n${texto}\n\nPide confirmación a Alejandro y vuelve a llamar con confirmado=true y jid ${c.jid}.`;
       const r = await client.send(c.jid, texto);
       return `✅ Enviado a ${chatTitle(r.chat)} a las ${when(r.message.timestamp)}.\nQuedan ${r.remaining.hour} envíos esta hora y ${r.remaining.day} hoy.`;
+    }),
+);
+
+const MAX_FILE = 16 * 1024 * 1024;
+
+server.registerTool(
+  'whatsapp_enviar_archivo',
+  {
+    title: 'Enviar una foto o archivo',
+    description:
+      'Envía una foto, video, audio o documento que está en el Mac de Alejandro (ruta absoluta o con ~) a un chat que ya existe, con un comentario opcional. Máx. 16 MB. JPG/PNG/MP4 van como foto/video; lo demás (PDF, Excel, HEIC, MOV…) como documento. OBLIGATORIO: antes de llamar con confirmado=true, muéstrale a Alejandro el destinatario, el archivo y el comentario y espera su "sí" explícito. Con confirmado=false solo devuelve la vista previa. Mismos límites que los textos.',
+    inputSchema: {
+      chat: z.string().min(1).describe('nombre, número o jid del chat'),
+      ruta: z
+        .string()
+        .min(1)
+        .describe('ruta del archivo en el Mac, p. ej. ~/Desktop/propuesta.pdf'),
+      comentario: z.string().max(1024).optional().describe('texto que acompaña al archivo'),
+      como_documento: z
+        .boolean()
+        .default(false)
+        .describe('true para mandar una foto o video sin comprimir, como documento'),
+      confirmado: z
+        .boolean()
+        .default(false)
+        .describe('true solo después de que Alejandro aprobó archivo y destinatario'),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+  },
+  ({ chat, ruta, comentario, como_documento, confirmado }) =>
+    run(async () => {
+      const path = resolveLocalPath(ruta);
+      const info = await stat(path).catch(() => null);
+      if (!info?.isFile()) throw new BridgeError(`No encuentro el archivo ${path}`);
+      if (info.size > MAX_FILE)
+        throw new BridgeError(
+          `El archivo pesa ${(info.size / 1024 / 1024).toFixed(1)} MB; el máximo es 16 MB`,
+        );
+      const c = await findChat(chat);
+      const fileName = basename(path);
+      const mimetype = mimeFor(path);
+      const size = `${(info.size / 1024).toFixed(0)} KB`;
+      if (!confirmado)
+        return `Vista previa (NO enviado):\nPara: ${chatTitle(c)}\nArchivo: ${fileName} (${size}, ${mimetype}${como_documento ? ', como documento' : ''})\nComentario: ${comentario?.trim() || '(ninguno)'}\n\nPide confirmación a Alejandro y vuelve a llamar con confirmado=true y jid ${c.jid}.`;
+      const data = await readFile(path);
+      const r = await client.sendFile(
+        c.jid,
+        { data, mimetype, fileName },
+        { caption: comentario ?? null, asDocument: como_documento },
+      );
+      return `✅ Enviado ${fileName} a ${chatTitle(r.chat)} a las ${when(r.message.timestamp)}.\nQuedan ${r.remaining.hour} envíos esta hora y ${r.remaining.day} hoy.`;
     }),
 );
 
