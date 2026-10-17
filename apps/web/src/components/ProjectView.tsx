@@ -2,10 +2,10 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Ban,
   CheckCheck,
-  Copy,
   Download,
   FileText,
   Folder,
+  FolderOpen,
   Forward,
   Image as ImageIcon,
   Pencil,
@@ -13,11 +13,12 @@ import {
   Reply,
   Search,
   Smile,
+  SquareTerminal,
   Users,
   X,
 } from 'lucide-react';
 import type { ArchivedMessage, MessageKind, ProjectInfo, SessionSummary } from '@wa-bridge/shared';
-import { api, projectMediaBlob } from '../lib/api';
+import { api, openFolderCommand, projectMediaBlob } from '../lib/api';
 import { fmtAgo, fmtBytes, fmtDateTime, fmtNumber, fmtPhone } from '../lib/format';
 import { Spinner } from './ui';
 
@@ -91,6 +92,30 @@ export function ProjectView({ session, jid }: { session: SessionSummary; jid: st
       )
       .reverse();
   }, [data, query, kind, who]);
+
+  const [copied, setCopied] = useState(false);
+  const [opening, setOpening] = useState(false);
+
+  async function copyCommand(dir: string) {
+    try {
+      await navigator.clipboard.writeText(openFolderCommand(dir));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setError('No se pudo copiar al portapapeles');
+    }
+  }
+
+  async function openFolder() {
+    setOpening(true);
+    try {
+      await api.openProjectFolder(id, jid);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setOpening(false);
+    }
+  }
 
   async function exportNow() {
     setExporting(true);
@@ -173,10 +198,24 @@ export function ProjectView({ session, jid }: { session: SessionSummary; jid: st
             </div>
             <button
               className="btn-secondary px-3 py-2"
-              onClick={() => void navigator.clipboard?.writeText(p.exportDir!)}
-              title="Copiar ruta"
+              onClick={() => void copyCommand(p.exportDir!)}
+              title={`Copia: ${openFolderCommand(p.exportDir)} — pégalo en la Terminal y se abre la carpeta`}
             >
-              <Copy className="size-4" />
+              {copied ? (
+                <CheckCheck className="size-4 text-turquesa-140" />
+              ) : (
+                <SquareTerminal className="size-4" />
+              )}
+              {copied ? '¡Copiado!' : 'Copiar comando'}
+            </button>
+            <button
+              className="btn-secondary px-3 py-2"
+              onClick={() => void openFolder()}
+              disabled={opening}
+              title="Abre la carpeta en Finder (Mac) o el Explorador (Windows)"
+            >
+              {opening ? <Spinner className="size-4" /> : <FolderOpen className="size-4" />}
+              Abrir carpeta
             </button>
             <button
               className="btn-primary px-3 py-2"

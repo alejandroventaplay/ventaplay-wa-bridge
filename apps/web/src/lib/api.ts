@@ -161,7 +161,20 @@ export const api = {
       `/sessions/${id}/projects/${encodeURIComponent(jid)}/export`,
       { method: 'POST' },
     ).then((r) => r.project),
+  /** abre la carpeta del proyecto en Finder / Explorador del equipo donde corre la API */
+  openProjectFolder: (id: string, jid: string) =>
+    request<{ ok: true; dir: string }>(`/sessions/${id}/projects/${encodeURIComponent(jid)}/open`, {
+      method: 'POST',
+    }),
 };
+
+/** comando para pegar en la Terminal (Mac/Linux) o en la consola (Windows) y abrir la carpeta */
+export function openFolderCommand(dir: string, platform = navigator.platform): string {
+  const quoted = `"${dir.replace(/"/g, '\\"')}"`;
+  if (/^win/i.test(platform)) return `explorer ${quoted}`;
+  if (/linux/i.test(platform)) return `xdg-open ${quoted}`;
+  return `open ${quoted}`;
+}
 
 /** archivo bajado de un mensaje de proyecto, como blob URL */
 export async function projectMediaBlob(id: string, jid: string, msgId: string): Promise<string> {

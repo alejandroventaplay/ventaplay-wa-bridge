@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Semaphore } from 'async-mutex';
 import { BufferJSON, DisconnectReason, type BaileysEventMap } from 'baileys';
@@ -509,6 +510,17 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       throw new HttpError(409, 'export_disabled', 'No hay carpeta de exportación configurada');
     await this.runExport(jid, now);
     return this.projectInfo(jid, await this.names());
+  }
+
+  /** ruta de la carpeta del proyecto; si todavía no existe, la exporta primero */
+  async projectFolder(chatJid: string): Promise<string> {
+    this.requireOwner();
+    const jid = this.projectJid(chatJid);
+    if (!this.deps.exportDir)
+      throw new HttpError(409, 'export_disabled', 'No hay carpeta de exportación configurada');
+    const dir = this.projectInfo(jid, await this.names()).exportDir!;
+    if (!existsSync(dir)) await this.runExport(jid);
+    return dir;
   }
 
   private projectJid(chatJid: string): string {

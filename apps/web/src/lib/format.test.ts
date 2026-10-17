@@ -51,3 +51,13 @@ describe('format', () => {
     expect(fmtBytes(1_300_000)).toBe('1,2 MB');
   });
 });
+
+import { openFolderCommand } from './api';
+
+describe('comando para abrir la carpeta', () => {
+  it('arma open / explorer con la ruta entre comillas', () => {
+    expect(openFolderCommand('/Users/a/proy x', 'MacIntel')).toBe('open "/Users/a/proy x"');
+    expect(openFolderCommand('C:\\data\\proy', 'Win32')).toBe('explorer "C:\\data\\proy"');
+    expect(openFolderCommand('/home/a/"x"', 'Linux x86_64')).toBe('xdg-open "/home/a/\\"x\\""');
+  });
+});

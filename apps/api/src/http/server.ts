@@ -7,6 +7,7 @@ import type { Config } from '../config.js';
 import { buildContactsWorkbook, contactsFileName } from '../export/contacts-xlsx.js';
 import { HttpError, type SessionManager } from '../session/manager.js';
 import { StatsAggregator } from '../session/stats.js';
+import { openFolder } from '../dev/open-folder.js';
 import type { Simulator } from '../wa/simulator.js';
 import type { Authenticator, Principal } from './auth.js';
 
@@ -23,6 +24,8 @@ export interface ServerDeps {
   logger: Logger;
   storageKind: 'file' | 'postgres';
   simulator?: Simulator | null;
+  /** para tests: reemplaza la apertura real de carpetas */
+  openFolder?: (dir: string) => void;
 }
 
 const IdParams = z.object({ id: z.string().uuid() });
@@ -286,6 +289,20 @@ export async function buildServer(deps: ServerDeps) {
           `inline; filename*=UTF-8''${encodeURIComponent(m.fileName)}`,
         );
       return reply.send(m.buffer);
+    });
+
+    /** abre la carpeta del proyecto en Finder / Explorador (solo con la API en tu equipo) */
+    api.post('/sessions/:id/projects/:jid/open', async (req) => {
+      const { id, jid } = ChatParams.parse(req.params);
+      if (config.NODE_ENV === 'production')
+        throw new HttpError(
+          409,
+          'not_local',
+          'Abrir carpetas solo funciona con la API en tu equipo',
+        );
+      const dir = await manager.get(id).projectFolder(jid);
+      (deps.openFolder ?? openFolder)(dir);
+      return { ok: true, dir };
     });
 
     /** reescribe la carpeta del proyecto (JSONL, Excel y archivos) */

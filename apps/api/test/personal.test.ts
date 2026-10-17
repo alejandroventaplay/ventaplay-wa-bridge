@@ -30,7 +30,7 @@ afterEach(async () => {
 
 async function setup(
   ownerPhone: string | null,
-  opts: { allowSend?: boolean; exportDir?: string } = {},
+  opts: { allowSend?: boolean; exportDir?: string; openFolder?: (dir: string) => void } = {},
 ) {
   const config = loadConfig({ NODE_ENV: 'test', API_TOKEN: TOKEN, WA_DRIVER: 'simulator' });
   const t = await tempStore();
@@ -60,6 +60,7 @@ async function setup(
     logger: silentLogger,
     storageKind: 'file',
     simulator: sim,
+    openFolder: opts.openFolder ?? (() => {}),
   });
   cleanups.push(
     t.cleanup,
@@ -345,7 +346,12 @@ describe('Mi vista', () => {
   it('aísla un grupo: guarda todo, baja la media y exporta la carpeta', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'wa-proy-'));
     cleanups.push(() => rm(dir, { recursive: true, force: true }));
-    const { app, id } = await setup('56912345678', { allowSend: true, exportDir: dir });
+    const opened: string[] = [];
+    const { app, id } = await setup('56912345678', {
+      allowSend: true,
+      exportDir: dir,
+      openFolder: (d) => opened.push(d),
+    });
     const group = (
       (
         await app.inject({ url: `/sessions/${id}/personal/chats`, headers: auth })
@@ -410,6 +416,12 @@ describe('Mi vista', () => {
     expect((await readdir(join(out, 'media'))).some((f) => f.endsWith('factura-77.pdf'))).toBe(
       true,
     );
+
+    // abrir la carpeta en Finder / Explorador
+    const open = await app.inject({ method: 'POST', url: `${url}/open`, headers: auth });
+    expect(open.statusCode).toBe(200);
+    expect(open.json().dir).toBe(out);
+    expect(opened).toEqual([out]);
 
     // otro número no ve proyectos
     const del = await app.inject({ method: 'DELETE', url, headers: auth });
