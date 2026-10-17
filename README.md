@@ -15,13 +15,15 @@ sesión muestra dos pestañas: **Mi vista** y **General** (la de siempre).
 
 - Mi vista separa **Conversaciones** y **Grupos** y los muestra como WhatsApp: los
   chats con actividad en los **últimos 30 días** y sus **últimos 10 mensajes**, con
-  fotos, audios, videos, stickers y documentos (si WhatsApp ya no tiene el archivo,
-  se ve la miniatura).
+  fotos, audios, videos, stickers y documentos. Si el enlace del archivo ya venció
+  (pasa a las ~2–4 semanas), el Bridge le pide a **tu propio teléfono** que lo vuelva a
+  subir (`updateMediaMessage`, solo para `OWNER_PHONE`, 2 a la vez) y guarda la ruta
+  nueva; si el teléfono ya no lo tiene, se ve la miniatura.
 - Es la única excepción a "no guardar contenido": esos mensajes se guardan
   **cifrados** junto a las credenciales y se **borran al desconectar**. Con cualquier
   otro número no se guarda nada y la pestaña no aparece.
-- Sigue siendo **solo lectura**: no envía, no marca como leído, no pide al teléfono
-  re-subir archivos vencidos.
+- No marca como leído ni cambia tu presencia. Enviar y pedir re-subidas de media
+  solo funcionan para tu número (ver más abajo).
 - El contenido llega por el History Sync al vincular y luego en vivo. Si el número
   se vinculó antes de activar `OWNER_PHONE`, hay que volver a vincularlo una vez.
 

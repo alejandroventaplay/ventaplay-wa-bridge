@@ -118,6 +118,15 @@ class SimSocket implements WaSocketLike {
     this.onEnd();
   }
 
+  /** el "teléfono" vuelve a subir la media: devuelve el mensaje con la ruta nueva */
+  async reuploadMedia(message: unknown): Promise<unknown> {
+    const m = message as { key?: unknown; message?: Record<string, Record<string, unknown>> };
+    const inner = { ...(m.message ?? {}) };
+    for (const k of Object.keys(inner))
+      inner[k] = { ...inner[k], directPath: '/fresh', expired: false };
+    return { key: m.key, message: inner };
+  }
+
   async sendText(jid: string, text: string): Promise<unknown> {
     if (!this.user) throw new Error('no conectado');
     return {
@@ -231,7 +240,14 @@ export function createSimulator(timing: Partial<Timing> = {}): Simulator {
       sock.scan();
       return true;
     },
-    downloadMedia: async (raw) => fakeMedia(raw),
+    downloadMedia: async (raw, opts) => {
+      // media "vencida" en el CDN: solo se baja si el teléfono la vuelve a subir
+      if (isExpired(raw)) {
+        if (!opts?.reupload) throw new Error('media vencida (410)');
+        return fakeMedia(await opts.reupload(raw));
+      }
+      return fakeMedia(raw);
+    },
   };
 }
 
@@ -240,6 +256,11 @@ const sentMedia = new Map<string, Buffer>();
 function rememberSent(id: string, data: Buffer): void {
   sentMedia.set(id, data);
   if (sentMedia.size > 50) sentMedia.delete(sentMedia.keys().next().value!);
+}
+
+function isExpired(raw: unknown): boolean {
+  const m = (raw as { message?: Record<string, { expired?: boolean }> } | null)?.message ?? {};
+  return Object.values(m).some((v) => v && typeof v === 'object' && v.expired === true);
 }
 
 /** media falsa: una imagen SVG, un tono WAV o un PDF mínimo */
@@ -410,7 +431,12 @@ export function buildFakeHistory(seed = 42): HistoryBatch[] {
       const message =
         r < 0.08
           ? {
-              imageMessage: { mimetype: 'image/svg+xml', caption: rand() < 0.5 ? 'Así quedó' : '' },
+              imageMessage: {
+                mimetype: 'image/svg+xml',
+                caption: rand() < 0.5 ? 'Así quedó' : '',
+                // como en WhatsApp: el archivo de las fotos viejas ya no está en el CDN
+                ...(recent ? {} : { expired: true }),
+              },
             }
           : r < 0.12
             ? { audioMessage: { mimetype: 'audio/wav', seconds: 1, ptt: true } }

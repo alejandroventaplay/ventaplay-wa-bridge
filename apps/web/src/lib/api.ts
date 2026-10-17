@@ -206,7 +206,8 @@ export function mediaBlob(id: string, jid: string, msgId: string): Promise<Media
       const token = await currentToken();
       const res = await fetch(
         `${API_URL}/sessions/${id}/personal/chats/${encodeURIComponent(jid)}/media/${encodeURIComponent(msgId)}`,
-        { headers: token ? { authorization: `Bearer ${token}` } : {} },
+        // sin caché del navegador: un 410 de antes no debe tapar una foto ya recuperada
+        { headers: token ? { authorization: `Bearer ${token}` } : {}, cache: 'no-store' },
       );
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };

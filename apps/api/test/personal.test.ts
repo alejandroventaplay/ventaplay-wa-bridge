@@ -418,4 +418,29 @@ describe('Mi vista', () => {
       (await app.inject({ url: `/sessions/${id}/projects`, headers: auth })).json().projects,
     ).toEqual([]);
   });
+
+  it('foto vieja vencida en el CDN: se la pide al teléfono y después baja directo', async () => {
+    const { app, id } = await setup('56912345678');
+    const list = (
+      await app.inject({ url: `/sessions/${id}/personal/chats?days=90`, headers: auth })
+    ).json() as PersonalChatList;
+    const month = 30 * 24 * 3600 * 1000;
+    for (const c of list.items) {
+      const { messages } = (
+        await app.inject({
+          url: `/sessions/${id}/personal/chats/${encodeURIComponent(c.jid)}/messages?limit=300`,
+          headers: auth,
+        })
+      ).json() as PersonalChatMessages;
+      const old = messages.find((x) => x.kind === 'image' && x.timestamp < Date.now() - month);
+      if (!old) continue;
+      const url = `/sessions/${id}/personal/chats/${encodeURIComponent(c.jid)}/media/${old.id}`;
+      const r = await app.inject({ url, headers: auth });
+      expect(r.statusCode).toBe(200);
+      expect(r.headers['x-media-thumbnail']).toBe('0');
+      expect(r.headers['content-type']).toMatch(/svg/);
+      return;
+    }
+    throw new Error('el simulador no dejó fotos viejas guardadas');
+  });
 });

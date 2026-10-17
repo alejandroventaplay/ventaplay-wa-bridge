@@ -30,6 +30,12 @@ export interface WaSocketLike {
   sendText?(jid: string, text: string): Promise<unknown>;
   /** igual que sendText (solo con ALLOW_SEND): foto, video, audio o documento */
   sendMedia?(jid: string, media: OutgoingMedia): Promise<unknown>;
+  /**
+   * Solo para el dueño: le pide a SU teléfono que vuelva a subir la foto/audio de un
+   * mensaje viejo cuyo archivo ya expiró en el CDN. No le escribe a nadie más.
+   * Devuelve el mensaje con la ruta nueva.
+   */
+  reuploadMedia?(message: unknown): Promise<unknown>;
 }
 
 /** archivo que el dueño manda desde Mi vista o Claude */
@@ -50,4 +56,7 @@ export interface SocketFactoryOptions {
 export type SocketFactory = (opts: SocketFactoryOptions) => Promise<WaSocketLike>;
 
 /** Descarga (y descifra) la media de un mensaje de WhatsApp. Solo HTTPS al CDN; no envía nada. */
-export type MediaDownloader = (message: unknown) => Promise<Buffer>;
+export type MediaDownloader = (
+  message: unknown,
+  opts?: { reupload?: ((message: unknown) => Promise<unknown>) | undefined },
+) => Promise<Buffer>;

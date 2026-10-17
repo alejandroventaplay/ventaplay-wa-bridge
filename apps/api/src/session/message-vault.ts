@@ -342,6 +342,15 @@ export class MessageVault {
     return [...this.chats.entries()];
   }
 
+  /** marca para guardar el chat que contiene este mensaje (tras cambiarle el raw) */
+  touch(id: string): void {
+    for (const [jid, list] of this.chats)
+      if (list.some((m) => m.id === id)) {
+        this.dirty.add(jid);
+        return;
+      }
+  }
+
   get(jid: string): StoredMessage[] {
     return this.chats.get(jid) ?? [];
   }

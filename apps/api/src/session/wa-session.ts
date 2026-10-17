@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
+import { Semaphore } from 'async-mutex';
 import { BufferJSON, DisconnectReason, type BaileysEventMap } from 'baileys';
 import type { Logger } from 'pino';
 import QRCode from 'qrcode';
@@ -623,7 +624,6 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   }
 
   private async runMedia(): Promise<void> {
-    const download = this.deps.downloadMedia!;
     for (;;) {
       if (this.disposed || this.loggingOut || !this.record.linked) return;
       if (this.ownerState() !== 'yes') return;
@@ -631,7 +631,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       if (!next) return;
       const { chatJid: jid, id } = next;
       try {
-        const buffer = await withTimeout(download(parseRaw(next.rawJson)), 60_000);
+        const buffer = await this.downloadWithRetry(parseRaw(next.rawJson));
         const sha = createHash('sha256').update(buffer).digest('base64');
         const verified = next.media?.sha256 ? sha === next.media.sha256 : null;
         await this.deps.store.writeAuth(this.id, {
@@ -935,14 +935,27 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     let result: { buffer: Buffer; mimetype: string; thumbnail: boolean } | null = null;
     if (this.deps.downloadMedia) {
       try {
-        const buffer = await withTimeout(this.deps.downloadMedia(parsed), 30_000);
+        const buffer = await this.downloadWithRetry(parsed, (updated) => {
+          // guardamos la ruta nueva: la próxima vez baja directo, sin molestar al teléfono
+          msg.raw = JSON.stringify(updated, BufferJSON.replacer);
+          this.vault.touch(msg.id);
+          this.scheduleVaultPersist();
+        });
         result = {
           buffer,
           mimetype: msg.media?.mimetype ?? 'application/octet-stream',
           thumbnail: false,
         };
       } catch (err) {
-        this.log.info({ err: errorMessage(err), kind: msg.kind }, 'media no disponible');
+        this.log.info(
+          {
+            err: errorMessage(err).slice(0, 80),
+            status: (err as { output?: { statusCode?: number } })?.output?.statusCode ?? null,
+            retry: Boolean(this.sock?.reuploadMedia),
+            kind: msg.kind,
+          },
+          'media no disponible',
+        );
       }
     }
     if (!result) {
@@ -966,6 +979,39 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     }
     this.cacheMedia(cacheKey, result);
     return result;
+  }
+
+  /** solo unas pocas re-subidas a la vez: cada una despierta al teléfono */
+  private reuploads = new Semaphore(2);
+
+  /**
+   * Baja la media; si el archivo venció en el CDN y es el WhatsApp del dueño, le pide
+   * a su teléfono que lo vuelva a subir (no le escribe a nadie más) y reintenta.
+   */
+  private async downloadWithRetry(
+    parsed: unknown,
+    onUpdated?: (updated: unknown) => void,
+  ): Promise<Buffer> {
+    const sock = this.sock;
+    const canRetry =
+      Boolean(sock?.reuploadMedia) &&
+      this.record.status === 'connected' &&
+      this.ownerState() === 'yes';
+    const reupload = canRetry
+      ? async (m: unknown) => {
+          const updated = await this.reuploads.runExclusive(() =>
+            withTimeout(sock!.reuploadMedia!(m), 25_000),
+          );
+          const u = updated as { key?: unknown; message?: unknown } | null;
+          if (u?.message) {
+            const base = parsed as Record<string, unknown>;
+            onUpdated?.({ ...base, key: u.key ?? base.key, message: u.message });
+          }
+          this.log.info('media vencida recuperada desde el teléfono');
+          return updated;
+        }
+      : undefined;
+    return withTimeout(this.deps.downloadMedia!(parsed, { reupload }), canRetry ? 60_000 : 30_000);
   }
 
   private cacheMedia(key: string, value: { buffer: Buffer; mimetype: string; thumbnail: boolean }) {

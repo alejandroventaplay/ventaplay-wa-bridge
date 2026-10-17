@@ -66,6 +66,7 @@ async function main(): Promise<void> {
         browser: config.WA_BROWSER,
         version: config.WA_VERSION,
         allowSend: config.ALLOW_SEND && Boolean(config.OWNER_PHONE),
+        allowMediaRetry: Boolean(config.OWNER_PHONE),
       });
 
   const manager = new SessionManager({
