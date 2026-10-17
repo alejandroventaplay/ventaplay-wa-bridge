@@ -305,6 +305,22 @@ export async function buildServer(deps: ServerDeps) {
       return { ok: true, dir };
     });
 
+    /**
+     * "Traer toda la conversación": le pide al teléfono del dueño el historial antiguo del
+     * chat por tramos y lo guarda completo (el chat queda aislado como proyecto).
+     */
+    api.post('/sessions/:id/personal/chats/:jid/history', async (req) => {
+      const { id, jid } = ChatParams.parse(req.params);
+      req.log.info({ session: id, chat: jid }, 'traer toda la conversación');
+      return { history: await manager.get(id).fetchFullHistory(jid) };
+    });
+
+    api.get('/sessions/:id/personal/chats/:jid/history', async (req, reply) => {
+      const { id, jid } = ChatParams.parse(req.params);
+      reply.header('cache-control', 'no-store');
+      return { history: manager.get(id).historyStatus(jid) };
+    });
+
     /** reescribe la carpeta del proyecto (JSONL, Excel y archivos) */
     api.post('/sessions/:id/projects/:jid/export', async (req) => {
       const { id, jid } = ChatParams.parse(req.params);

@@ -9,6 +9,7 @@ import {
   Film,
   FolderKanban,
   Headphones,
+  History,
   ImageOff,
   Lock,
   MapPin,
@@ -21,6 +22,7 @@ import {
 } from 'lucide-react';
 import type {
   ChatMessage,
+  HistoryFetchStatus,
   MessageKind,
   PersonalChat,
   PersonalChatList,
@@ -32,6 +34,7 @@ import { api, mediaBlob, type MediaBlob } from '../lib/api';
 import {
   fmtBytes,
   fmtChatStamp,
+  fmtDate,
   fmtDayLabel,
   fmtDuration,
   fmtNumber,
@@ -322,6 +325,88 @@ function NoChat({ sendEnabled }: { sendEnabled: boolean }) {
 
 // ----------------------------------------------------------------- chat
 
+/**
+ * "Traer toda la conversación": le pide a tu teléfono el historial antiguo del chat
+ * por tramos y lo guarda completo en su proyecto. Muestra el avance mientras llega.
+ */
+function FetchHistoryButton({
+  sessionId,
+  jid,
+  onOpen,
+}: {
+  sessionId: string;
+  jid: string;
+  onOpen?: ((jid: string) => Promise<void>) | undefined;
+}) {
+  const [st, setSt] = useState<HistoryFetchStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const running = st?.state === 'running';
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .historyStatus(sessionId, jid)
+      .then((s) => alive && setSt(s))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [sessionId, jid]);
+
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(() => {
+      api
+        .historyStatus(sessionId, jid)
+        .then(setSt)
+        .catch((e: Error) => setError(e.message));
+    }, 2000);
+    return () => clearInterval(t);
+  }, [running, sessionId, jid]);
+
+  const finished = st && (st.state === 'done' || st.state === 'error');
+  const label = running
+    ? `Trayendo… ${fmtNumber(st.total)}`
+    : finished && st.state === 'done'
+      ? `Completa · ${fmtNumber(st.total)}`
+      : 'Traer toda la conversación';
+  const title = running
+    ? `Pidiéndole el historial a tu teléfono (tramo ${st.pages + 1}). +${fmtNumber(st.added)} mensajes antiguos hasta ahora.`
+    : st?.state === 'done'
+      ? `${fmtNumber(st.total)} mensajes guardados desde el ${fmtDate(st.oldest)}${
+          st.reason === 'limit' ? ' (tope de tramos: vuelve a pedir para seguir)' : ''
+        }${
+          st.reason === 'timeout'
+            ? '. No llegó nada más antiguo: o ya estaba completa, o el teléfono no respondió (prueba con WhatsApp abierto en el teléfono)'
+            : ''
+        }. Clic para ver todo.`
+      : st?.state === 'error'
+        ? `No se pudo: ${st.error ?? error ?? 'error'}`
+        : 'Le pide a tu teléfono todo el historial antiguo de este chat y lo guarda completo, sin tope';
+
+  return (
+    <button
+      className="btn-secondary px-3 py-2"
+      disabled={running}
+      title={error ?? title}
+      onClick={() => {
+        setError(null);
+        if (st?.state === 'done' && onOpen) {
+          void onOpen(jid).catch((e: Error) => setError(e.message));
+          return;
+        }
+        api
+          .fetchHistory(sessionId, jid)
+          .then(setSt)
+          .catch((e: Error) => setError(e.message));
+      }}
+    >
+      {running ? <Spinner className="size-4" /> : <History className="size-4" />}
+      <span className="hidden sm:inline">{error ? 'Reintentar' : label}</span>
+    </button>
+  );
+}
+
 function ChatPanel({
   sessionId,
   chat,
@@ -386,9 +471,10 @@ function ChatPanel({
           <p className="truncate font-black">{chat.name}</p>
           <p className="truncate text-xs text-ink-soft">{subtitle}</p>
         </div>
+        <FetchHistoryButton sessionId={sessionId} jid={chat.jid} onOpen={onIsolate} />
         {onIsolate && (
           <button
-            className={isolated ? 'btn-secondary px-3 py-2' : 'btn-secondary px-3 py-2'}
+            className="btn-secondary px-3 py-2"
             disabled={isolating}
             title={
               isolated

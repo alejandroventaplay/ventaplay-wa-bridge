@@ -19,6 +19,8 @@ export const BLOCKED_METHODS = [
   'readMessages',
   'sendPeerDataOperationMessage',
   'sendRawMessage',
+  // historial a pedido: solo se expone envuelto (fetchHistory) para el dueño
+  'fetchMessageHistory',
   // primitivas de bajo nivel: Baileys las usa internamente por closure, no por esta API
   'sendNode',
   'query',

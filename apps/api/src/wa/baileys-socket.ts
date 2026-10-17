@@ -44,6 +44,8 @@ export interface BaileysFactoryOptions {
   allowSend?: boolean;
   /** expone reuploadMedia: pedirle al teléfono del dueño que re-suba media vencida */
   allowMediaRetry?: boolean;
+  /** expone fetchHistory: pedirle al teléfono del dueño el historial antiguo de un chat */
+  allowHistoryFetch?: boolean;
 }
 
 export function createBaileysFactory(opts: BaileysFactoryOptions = {}): SocketFactory {
@@ -76,7 +78,12 @@ export function createBaileysFactory(opts: BaileysFactoryOptions = {}): SocketFa
     // exponemos texto plano. La sesión decide quién y cuánto puede enviar.
     const original = opts.allowSend ? sock.sendMessage : null;
     const reupload = opts.allowMediaRetry ? sock.updateMediaMessage : null;
+    const history = opts.allowHistoryFetch ? sock.fetchMessageHistory : null;
     const blocked = enforceReadOnly(sock);
+    if (history) {
+      (sock as unknown as WaSocketLike).fetchHistory = (count, oldest, ts) =>
+        history(count, { remoteJid: oldest.remoteJid, id: oldest.id, fromMe: oldest.fromMe }, ts);
+    }
     if (reupload) {
       (sock as unknown as WaSocketLike).reuploadMedia = (m) => reupload(m as WAMessage);
     }

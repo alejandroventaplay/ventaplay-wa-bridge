@@ -1,12 +1,14 @@
 import { EventEmitter } from 'node:events';
 import type { BaileysEventMap, WABusinessProfile } from 'baileys';
 import type { HistoryBatch } from '../session/stats.js';
-import type {
-  MediaDownloader,
-  OutgoingMedia,
-  SocketFactory,
-  SocketFactoryOptions,
-  WaSocketLike,
+import {
+  type HistoryAnchor,
+  type MediaDownloader,
+  type OutgoingMedia,
+  type SocketFactory,
+  type SocketFactoryOptions,
+  SYNC_ON_DEMAND,
+  type WaSocketLike,
 } from './types.js';
 
 /**
@@ -18,6 +20,8 @@ import type {
 
 const DEMO_JID = '56912345678@s.whatsapp.net';
 const DEMO_LID = '118477331234567@lid';
+/** tramos de historial antiguo que entrega el simulador antes de decir "no hay más" */
+const SIM_HISTORY_PAGES = 3;
 
 interface Timing {
   firstQrMs: number;
@@ -155,6 +159,47 @@ class SimSocket implements WaSocketLike {
       message,
       messageTimestamp: Math.floor(Date.now() / 1000),
     };
+  }
+
+  /** pedidos de historial que ya respondió el "teléfono", por chat */
+  private historyPages = new Map<string, number>();
+
+  /**
+   * El "teléfono" responde el historial a pedido: SIM_HISTORY_PAGES tramos de mensajes
+   * más antiguos que `oldest` y luego uno vacío (ya no hay más).
+   */
+  async fetchHistory(count: number, oldest: HistoryAnchor, oldestTs: number): Promise<unknown> {
+    if (!this.user) throw new Error('no conectado');
+    const jid = oldest.remoteJid;
+    const page = (this.historyPages.get(jid) ?? 0) + 1;
+    this.historyPages.set(jid, page);
+    const n = page > SIM_HISTORY_PAGES ? 0 : Math.min(count, 20);
+    const group = jid.endsWith('@g.us');
+    const messages = Array.from({ length: n }, (_, i) => {
+      const fromMe = i % 3 === 0;
+      return {
+        key: {
+          remoteJid: jid,
+          id: `SIMOLD${page}X${i}`,
+          fromMe,
+          ...(group && !fromMe ? { participant: DEMO_JID } : {}),
+        },
+        messageTimestamp: Math.floor((oldestTs - (n - i) * 3_600_000) / 1000),
+        message: { conversation: `Mensaje antiguo ${page}.${i + 1}` },
+      };
+    });
+    this.later(this.timing.batchEveryMs / 4, () =>
+      this.emit('messaging-history.set', {
+        chats: [],
+        contacts: [],
+        messages: messages as BaileysEventMap['messaging-history.set']['messages'],
+        lidPnMappings: [],
+        progress: null,
+        syncType: SYNC_ON_DEMAND,
+        isLatest: false,
+      } as BaileysEventMap['messaging-history.set']),
+    );
+    return `SIMREQ${page}`;
   }
 
   async profilePictureUrl(): Promise<string | undefined> {

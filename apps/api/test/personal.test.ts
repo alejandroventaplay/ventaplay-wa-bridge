@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
+  HistoryFetchStatus,
   PersonalChatList,
   PersonalChatMessages,
   ProjectInfo,
@@ -454,5 +455,58 @@ describe('Mi vista', () => {
       return;
     }
     throw new Error('el simulador no dejó fotos viejas guardadas');
+  });
+});
+
+describe('Traer toda la conversación', () => {
+  it('pide el historial antiguo por tramos hasta que el teléfono no tiene más y lo guarda completo', async () => {
+    const { app, id } = await setup('56912345678');
+    const group = (
+      (
+        await app.inject({ url: `/sessions/${id}/personal/chats`, headers: auth })
+      ).json() as PersonalChatList
+    ).items.find((c) => c.isGroup)!;
+    const url = `/sessions/${id}/personal/chats/${encodeURIComponent(group.jid)}/history`;
+
+    const idle = (await app.inject({ url, headers: auth })).json().history as HistoryFetchStatus;
+    expect(idle.state).toBe('idle');
+
+    const r = await app.inject({ method: 'POST', url, headers: auth });
+    expect(r.statusCode).toBe(200);
+    const started = r.json().history as HistoryFetchStatus;
+    expect(started.state).toBe('running');
+    const before = started.total;
+    const oldestBefore = started.oldest!;
+
+    let st = started;
+    for (let t = 0; st.state === 'running'; t++) {
+      if (t > 200) throw new Error(`no terminó: ${JSON.stringify(st)}`);
+      await new Promise((res) => setTimeout(res, 20));
+      st = (await app.inject({ url, headers: auth })).json().history as HistoryFetchStatus;
+    }
+    // el simulador entrega 3 tramos de 20 y luego uno vacío
+    expect(st).toMatchObject({ state: 'done', reason: 'complete', pages: 4, added: 60 });
+    expect(st.total).toBe(before + 60);
+    expect(st.oldest!).toBeLessThan(oldestBefore);
+
+    // el chat quedó aislado con todo, incluido lo más antiguo
+    const p = (
+      await app.inject({
+        url: `/sessions/${id}/projects/${encodeURIComponent(group.jid)}/messages?limit=5000`,
+        headers: auth,
+      })
+    ).json() as ProjectMessages;
+    expect(p.messages.length).toBe(st.total);
+    expect(p.messages[0]!.text).toMatch(/^Mensaje antiguo 3\./);
+  });
+
+  it('solo para el número dueño', async () => {
+    const { app, id } = await setup('56999999999');
+    const r = await app.inject({
+      method: 'POST',
+      url: `/sessions/${id}/personal/chats/${encodeURIComponent('123@g.us')}/history`,
+      headers: auth,
+    });
+    expect(r.statusCode).toBe(403);
   });
 });

@@ -291,6 +291,28 @@ export interface ProjectInfo {
   exportedAt: number | null;
 }
 
+/**
+ * "Traer toda la conversación": le pide al teléfono del dueño el historial antiguo de
+ * un chat por tramos (History Sync a pedido) y lo guarda completo en su proyecto.
+ */
+export interface HistoryFetchStatus {
+  jid: string;
+  state: 'idle' | 'running' | 'done' | 'error';
+  /** tramos que ya respondió el teléfono */
+  pages: number;
+  /** mensajes nuevos que llegaron (más antiguos que lo que ya había) */
+  added: number;
+  /** total guardado del chat */
+  total: number;
+  /** mensaje más antiguo guardado (epoch ms) */
+  oldest: number | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+  /** por qué terminó: 'complete' (no hay más), 'limit' (tope de tramos), 'timeout' (el teléfono no respondió) */
+  reason: 'complete' | 'limit' | 'timeout' | null;
+  error: string | null;
+}
+
 export interface ProjectPerson {
   jid: string | null;
   lid: string | null;

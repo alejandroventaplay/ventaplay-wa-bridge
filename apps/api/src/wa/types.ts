@@ -36,7 +36,23 @@ export interface WaSocketLike {
    * Devuelve el mensaje con la ruta nueva.
    */
   reuploadMedia?(message: unknown): Promise<unknown>;
+  /**
+   * Solo para el dueño: le pide a SU teléfono un tramo de historial más antiguo que
+   * `oldest` (History Sync a pedido). No le escribe a nadie más; los mensajes llegan
+   * después por `messaging-history.set` con syncType ON_DEMAND.
+   */
+  fetchHistory?(count: number, oldest: HistoryAnchor, oldestTimestampMs: number): Promise<unknown>;
 }
+
+/** mensaje más antiguo que ya tenemos de un chat: desde ahí se pide hacia atrás */
+export interface HistoryAnchor {
+  remoteJid: string;
+  id: string;
+  fromMe: boolean;
+}
+
+/** syncType de WhatsApp para el historial pedido a demanda (proto.HistorySync.HistorySyncType) */
+export const SYNC_ON_DEMAND = 6;
 
 /** archivo que el dueño manda desde Mi vista o Claude */
 export interface OutgoingMedia {

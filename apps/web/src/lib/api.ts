@@ -1,4 +1,5 @@
 import type {
+  HistoryFetchStatus,
   PersonalChatList,
   PersonalChatMessages,
   ProjectInfo,
@@ -136,6 +137,16 @@ export const api = {
         asDocument: Boolean(opts.asDocument),
       }),
     }),
+  /** "Traer toda la conversación": pide al teléfono el historial antiguo del chat */
+  fetchHistory: (id: string, jid: string) =>
+    request<{ history: HistoryFetchStatus }>(
+      `/sessions/${id}/personal/chats/${encodeURIComponent(jid)}/history`,
+      { method: 'POST' },
+    ).then((r) => r.history),
+  historyStatus: (id: string, jid: string) =>
+    request<{ history: HistoryFetchStatus }>(
+      `/sessions/${id}/personal/chats/${encodeURIComponent(jid)}/history`,
+    ).then((r) => r.history),
   /** proyectos: chats aislados con todo su dato */
   projects: (id: string) =>
     request<{ projects: ProjectInfo[] }>(`/sessions/${id}/projects`).then((r) => r.projects),

@@ -22,11 +22,19 @@ import type {
   ArchivedMessage,
   ProjectInfo,
   ProjectMessages,
+  HistoryFetchStatus,
 } from '@wa-bridge/shared';
 import { projectSlug, writeProjectExport } from '../export/project-export.js';
 import type { SessionRecord, SessionStore } from '../store/types.js';
 import { loadAuthState, type StoredAuthState } from '../wa/auth-state.js';
-import type { MediaDownloader, OutgoingMedia, SocketFactory, WaSocketLike } from '../wa/types.js';
+import {
+  type HistoryAnchor,
+  type MediaDownloader,
+  type OutgoingMedia,
+  type SocketFactory,
+  SYNC_ON_DEMAND,
+  type WaSocketLike,
+} from '../wa/types.js';
 import {
   ARCHIVE_PREFIX,
   type ArchiveRecord,
@@ -68,6 +76,10 @@ const PERSIST_THROTTLE_MS = 2_000;
 const LID_RELOAD_MS = 30_000;
 /** cada cuánto guardamos los mensajes nuevos de "Mi vista" */
 const VAULT_PERSIST_MS = 3_000;
+/** "Traer toda la conversación": mensajes por tramo, tope de tramos y espera por tramo */
+export const HISTORY_PAGE = 50;
+export const HISTORY_MAX_PAGES = 60;
+export const HISTORY_WAIT_MS = 40_000;
 /** media descargada que mantenemos en memoria */
 const MEDIA_CACHE_BYTES = 64 * 1024 * 1024;
 
@@ -113,6 +125,11 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   private mediaRunning = false;
   private exportTimer: NodeJS.Timeout | null = null;
   private exporting: Promise<unknown> = Promise.resolve();
+  /** "Traer toda la conversación" en curso o terminado, por chat */
+  private backfills = new Map<
+    string,
+    HistoryFetchStatus & { timer: NodeJS.Timeout | null; asked: number | null }
+  >();
 
   private sock: WaSocketLike | null = null;
   private auth: StoredAuthState | null = null;
@@ -521,6 +538,162 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     const dir = this.projectInfo(jid, await this.names()).exportDir!;
     if (!existsSync(dir)) await this.runExport(jid);
     return dir;
+  }
+
+  // ------------------------------------------------------------ traer toda la conversación
+
+  /**
+   * Le pide al teléfono del dueño el historial antiguo de un chat, por tramos de
+   * HISTORY_PAGE, hasta que no quede más (o el tope). El chat se aísla como proyecto
+   * para guardarlo completo, sin el tope de 300 / 90 días de la bóveda.
+   */
+  async fetchFullHistory(chatJid: string, now = Date.now()): Promise<HistoryFetchStatus> {
+    this.requireOwner();
+    const sock = this.sock;
+    if (!sock?.fetchHistory)
+      throw new HttpError(409, 'history_unavailable', 'WhatsApp no está conectado ahora');
+    const jid = this.canon(normalizeJid(chatJid));
+    const cur = this.backfills.get(jid);
+    if (cur?.state === 'running') return this.backfillStatus(jid);
+    await this.isolate(jid, now);
+    const st = {
+      jid,
+      state: 'running' as const,
+      pages: 0,
+      added: 0,
+      total: 0,
+      oldest: null,
+      startedAt: now,
+      finishedAt: null,
+      reason: null,
+      error: null,
+      timer: null,
+      asked: null,
+    };
+    this.backfills.set(jid, st);
+    this.log.info({ chat: jid }, 'pidiendo historial completo al teléfono');
+    await this.askNextPage(jid);
+    return this.backfillStatus(jid);
+  }
+
+  /** estado de "traer toda la conversación" de un chat */
+  historyStatus(chatJid: string): HistoryFetchStatus {
+    this.requireOwner();
+    return this.backfillStatus(this.canon(normalizeJid(chatJid)));
+  }
+
+  private backfillStatus(jid: string): HistoryFetchStatus {
+    const list = this.archive.tracked(jid) ? this.archive.messages(jid) : [];
+    const st = this.backfills.get(jid);
+    const base: HistoryFetchStatus = {
+      jid,
+      state: 'idle',
+      pages: 0,
+      added: 0,
+      total: list.length,
+      oldest: list[0]?.timestamp ?? null,
+      startedAt: null,
+      finishedAt: null,
+      reason: null,
+      error: null,
+    };
+    if (!st) return base;
+    const { timer: _t, asked: _a, ...rest } = st;
+    return { ...rest, total: base.total, oldest: base.oldest };
+  }
+
+  /** mensaje más antiguo guardado del chat, con la key original de WhatsApp */
+  private oldestAnchor(jid: string): { anchor: HistoryAnchor; ts: number } | null {
+    const first = this.archive.messages(jid)[0];
+    if (!first) return null;
+    const raw = parseRaw(first.rawJson) as { key?: { remoteJid?: string } } | null;
+    return {
+      anchor: { remoteJid: raw?.key?.remoteJid ?? jid, id: first.id, fromMe: first.fromMe },
+      ts: first.timestamp,
+    };
+  }
+
+  private async askNextPage(jid: string): Promise<void> {
+    const st = this.backfills.get(jid);
+    if (!st || st.state !== 'running') return;
+    const sock = this.sock;
+    const from = this.oldestAnchor(jid);
+    if (!sock?.fetchHistory || !from) {
+      this.finishBackfill(
+        jid,
+        sock?.fetchHistory ? 'complete' : null,
+        sock ? null : 'Se cortó la conexión con WhatsApp',
+      );
+      return;
+    }
+    st.asked = from.ts;
+    if (st.timer) clearTimeout(st.timer);
+    st.timer = setTimeout(
+      () => this.finishBackfill(jid, st.pages ? 'complete' : 'timeout'),
+      HISTORY_WAIT_MS,
+    );
+    try {
+      await sock.fetchHistory(HISTORY_PAGE, from.anchor, from.ts);
+    } catch (err) {
+      this.finishBackfill(jid, null, errorMessage(err));
+    }
+  }
+
+  /** cuántos mensajes tiene guardados cada chat con historial en curso */
+  private backfillSizes(): Map<string, number> {
+    const out = new Map<string, number>();
+    for (const [jid, st] of this.backfills)
+      if (st.state === 'running') out.set(jid, this.archive.messages(jid).length);
+    return out;
+  }
+
+  /**
+   * Llegó un tramo pedido: si trajo algo más antiguo, se pide el siguiente. Un tramo
+   * vacío es la forma en que el teléfono dice "no hay más".
+   */
+  private onDemandBatch(before: Map<string, number>, empty: boolean): void {
+    for (const [jid, prev] of before) {
+      const st = this.backfills.get(jid);
+      if (!st || st.state !== 'running') continue;
+      if (empty) {
+        st.pages += 1;
+        this.finishBackfill(jid, 'complete');
+        continue;
+      }
+      const now = this.archive.messages(jid).length;
+      const oldest = this.archive.messages(jid)[0]?.timestamp ?? null;
+      const gotOlder = now > prev && oldest !== null && st.asked !== null && oldest < st.asked;
+      if (now === prev && !gotOlder) continue; // el tramo era de otro chat
+      st.pages += 1;
+      st.added += Math.max(now - prev, 0);
+      if (!gotOlder) this.finishBackfill(jid, 'complete');
+      else if (st.pages >= HISTORY_MAX_PAGES) this.finishBackfill(jid, 'limit');
+      else void this.askNextPage(jid);
+    }
+  }
+
+  private finishBackfill(
+    jid: string,
+    reason: HistoryFetchStatus['reason'],
+    error: string | null = null,
+  ): void {
+    const st = this.backfills.get(jid);
+    if (!st || st.state !== 'running') return;
+    if (st.timer) clearTimeout(st.timer);
+    st.timer = null;
+    st.state = error ? 'error' : 'done';
+    st.reason = reason;
+    st.error = error;
+    st.finishedAt = Date.now();
+    this.log.info(
+      { chat: jid, tramos: st.pages, nuevos: st.added, motivo: reason, error },
+      'historial completo: terminado',
+    );
+  }
+
+  private stopBackfills(): void {
+    for (const jid of this.backfills.keys())
+      this.finishBackfill(jid, null, 'Se cortó la conexión con WhatsApp');
   }
 
   private projectJid(chatJid: string): string {
@@ -1146,6 +1319,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     if (bump) this.generation++;
     const sock = this.sock;
     this.sock = null;
+    this.stopBackfills();
     if (!sock) return;
     // solo end(): borrar listeners rompería la limpieza interna de Baileys;
     // los eventos de este socket viejo se ignoran por la generación
@@ -1183,6 +1357,8 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     });
 
     on('messaging-history.set', (h) => {
+      const onDemand = h.syncType === SYNC_ON_DEMAND;
+      const before = onDemand ? this.backfillSizes() : null;
       this.stats.addHistoryBatch({
         chats: h.chats,
         contacts: h.contacts,
@@ -1193,6 +1369,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
         isLatest: h.isLatest ?? null,
       });
       this.captureMessages(h.messages, 'history');
+      if (before) this.onDemandBatch(before, h.messages.length === 0);
       this.log.info(
         {
           chats: h.chats.length,
@@ -1294,6 +1471,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
 
   private handleClose(code: number | undefined, error: unknown): void {
     this.sock = null;
+    this.stopBackfills();
     if (this.loggingOut || this.stopped) return;
     this.log.info({ code, err: errorMessage(error) }, 'conexión cerrada');
 
