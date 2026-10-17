@@ -56,12 +56,15 @@ export function MyView({
   session,
   projects = [],
   onIsolate,
+  onProjectsChanged,
 }: {
   session: SessionSummary;
   /** chats aislados como proyecto */
   projects?: string[];
   /** aísla el chat (o abre su pestaña si ya lo está) */
   onIsolate?: (jid: string) => Promise<void>;
+  /** algo creó o cambió un proyecto por fuera (p. ej. traer toda la conversación) */
+  onProjectsChanged?: () => void;
 }) {
   const id = session.id;
   const [list, setList] = useState<PersonalChatList | null>(null);
@@ -181,6 +184,7 @@ export function MyView({
               sendEnabled={Boolean(session.personal?.sendEnabled)}
               isolated={projects.includes(current.jid)}
               onIsolate={onIsolate}
+              onProjectsChanged={onProjectsChanged}
               onBack={() => setSelected(null)}
             />
           ) : (
@@ -333,10 +337,13 @@ function FetchHistoryButton({
   sessionId,
   jid,
   onOpen,
+  onChanged,
 }: {
   sessionId: string;
   jid: string;
   onOpen?: ((jid: string) => Promise<void>) | undefined;
+  /** el chat quedó aislado como proyecto: la pestaña nueva debe aparecer */
+  onChanged?: (() => void) | undefined;
 }) {
   const [st, setSt] = useState<HistoryFetchStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -352,6 +359,12 @@ function FetchHistoryButton({
       alive = false;
     };
   }, [sessionId, jid]);
+
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (wasRunning.current && !running) onChanged?.();
+    wasRunning.current = running;
+  }, [running, onChanged]);
 
   useEffect(() => {
     if (!running) return;
@@ -397,7 +410,10 @@ function FetchHistoryButton({
         }
         api
           .fetchHistory(sessionId, jid)
-          .then(setSt)
+          .then((s) => {
+            setSt(s);
+            onChanged?.();
+          })
           .catch((e: Error) => setError(e.message));
       }}
     >
@@ -414,6 +430,7 @@ function ChatPanel({
   sendEnabled,
   isolated,
   onIsolate,
+  onProjectsChanged,
   onBack,
 }: {
   sessionId: string;
@@ -422,6 +439,7 @@ function ChatPanel({
   sendEnabled: boolean;
   isolated: boolean;
   onIsolate?: (jid: string) => Promise<void>;
+  onProjectsChanged?: (() => void) | undefined;
   onBack: () => void;
 }) {
   const [isolating, setIsolating] = useState(false);
@@ -471,7 +489,12 @@ function ChatPanel({
           <p className="truncate font-black">{chat.name}</p>
           <p className="truncate text-xs text-ink-soft">{subtitle}</p>
         </div>
-        <FetchHistoryButton sessionId={sessionId} jid={chat.jid} onOpen={onIsolate} />
+        <FetchHistoryButton
+          sessionId={sessionId}
+          jid={chat.jid}
+          onOpen={onIsolate}
+          onChanged={onProjectsChanged}
+        />
         {onIsolate && (
           <button
             className="btn-secondary px-3 py-2"

@@ -147,6 +147,12 @@ export function SessionPage() {
             <MyView
               session={session}
               projects={projects.map((p) => p.jid)}
+              onProjectsChanged={() =>
+                void api
+                  .projects(id)
+                  .then(setProjects)
+                  .catch(() => {})
+              }
               onIsolate={async (jid) => {
                 const p = await api.isolate(id, jid);
                 setProjects((cur) => [...cur.filter((x) => x.jid !== p.jid), p]);
