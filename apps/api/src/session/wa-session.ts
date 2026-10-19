@@ -55,6 +55,7 @@ import {
   VIEW_WINDOW_MS,
 } from './message-vault.js';
 import { SendLimiter } from './send-limiter.js';
+import { type Transcriber, UnsupportedAudioError } from '../transcribe/transcriber.js';
 import { type Directory, isGroupJid, normalizeJid, phoneOf, StatsAggregator } from './stats.js';
 
 /** WhatsApp muestra el primer QR ~60 s y los siguientes ~20 s */
@@ -95,6 +96,26 @@ export interface WaSessionDeps {
   allowSend?: boolean;
   /** carpeta donde se exportan los proyectos (chats aislados); null = no se exporta */
   exportDir?: string | null;
+  /** transcribe notas de voz en el equipo (Whisper local); null = apagado */
+  transcriber?: Transcriber | null;
+  /** transcribe solas las notas de voz que lleguen en vivo */
+  autoTranscribe?: boolean;
+}
+
+/** prefijo de las transcripciones guardadas (cifradas, junto a la bóveda) */
+export const TRANSCRIPT_PREFIX = 'transcript:';
+
+export interface StoredTranscript {
+  chatJid: string;
+  text: string;
+  model: string;
+  seconds: number;
+  at: number;
+}
+
+export interface TranscriptResult extends StoredTranscript {
+  messageId: string;
+  cached: boolean;
 }
 
 export interface WaSessionEvents {
@@ -126,6 +147,10 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   private exportTimer: NodeJS.Timeout | null = null;
   private exporting: Promise<unknown> = Promise.resolve();
   /** "Traer toda la conversación" en curso o terminado, por chat */
+  /** transcripciones de notas de voz, por id de mensaje */
+  private transcripts = new Map<string, StoredTranscript>();
+  private transcriptsDirty = new Set<string>();
+  private transcribing = new Map<string, Promise<TranscriptResult>>();
   private backfills = new Map<
     string,
     HistoryFetchStatus & { timer: NodeJS.Timeout | null; asked: number | null }
@@ -255,6 +280,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       storeDays: VAULT_WINDOW_DAYS,
       storePerChat: VAULT_PER_CHAT,
       sendEnabled: Boolean(this.deps.allowSend),
+      transcribeEnabled: Boolean(this.deps.transcriber),
     };
   }
 
@@ -276,6 +302,117 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     }
     if (this.vault.add(messages) > 0) this.scheduleVaultPersist();
     this.archiveChanged(this.archive.ingest(messages, source, this.identity(), this.canon));
+    if (source === 'live') this.autoTranscribe(messages);
+  }
+
+  // ------------------------------------------------------------ transcripción
+
+  /** notas de voz que llegan en vivo: se transcriben solas, de a una */
+  private autoTranscribe(messages: Parameters<MessageVault['add']>[0]): void {
+    if (!this.deps.transcriber || !this.deps.autoTranscribe) return;
+    if (this.ownerState() !== 'yes') return;
+    for (const m of messages) {
+      const jid = m?.key?.remoteJid;
+      const id = m?.key?.id;
+      if (!jid || !id || this.transcripts.has(id)) continue;
+      const inner = unwrapMessage(m.message) as { audioMessage?: { ptt?: boolean | null } } | null;
+      if (!inner?.audioMessage) continue;
+      void this.transcribeMessage(jid, id).catch((err: unknown) =>
+        this.log.info(
+          { err: errorMessage(err).slice(0, 120) },
+          'no se pudo transcribir la nota de voz',
+        ),
+      );
+    }
+  }
+
+  private takeDirtyTranscripts(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const id of this.transcriptsDirty) {
+      const t = this.transcripts.get(id);
+      if (t) out[TRANSCRIPT_PREFIX + id] = JSON.stringify(t);
+    }
+    this.transcriptsDirty.clear();
+    return out;
+  }
+
+  /** la transcripción guardada de un mensaje, si existe */
+  transcriptOf(messageId: string): StoredTranscript | null {
+    return this.transcripts.get(messageId) ?? null;
+  }
+
+  /**
+   * Pasa a texto una nota de voz (o audio OGG) de un chat guardado o de un proyecto.
+   * Corre en el equipo; el audio no sale a ningún servicio. Queda guardada (cifrada).
+   */
+  async transcribeMessage(
+    chatJid: string,
+    messageId: string,
+    opts: { force?: boolean } = {},
+  ): Promise<TranscriptResult> {
+    this.requireOwner();
+    const transcriber = this.deps.transcriber;
+    if (!transcriber)
+      throw new HttpError(409, 'transcribe_disabled', 'La transcripción de audios está apagada');
+    const existing = this.transcripts.get(messageId);
+    if (existing && !opts.force) return { ...existing, messageId, cached: true };
+    const running = this.transcribing.get(messageId);
+    if (running) return running;
+
+    const job = (async (): Promise<TranscriptResult> => {
+      const audio = await this.audioFor(chatJid, messageId);
+      let result;
+      try {
+        result = await transcriber.transcribe(audio.buffer, audio.mimetype);
+      } catch (err) {
+        if (err instanceof UnsupportedAudioError)
+          throw new HttpError(415, 'unsupported_audio', err.message);
+        throw err;
+      }
+      const stored: StoredTranscript = {
+        chatJid: audio.chatJid,
+        text: result.text,
+        model: result.model,
+        seconds: Math.round(result.seconds),
+        at: Date.now(),
+      };
+      this.transcripts.set(messageId, stored);
+      this.transcriptsDirty.add(messageId);
+      this.scheduleVaultPersist();
+      this.log.info(
+        { seconds: stored.seconds, ms: result.tookMs, model: result.model },
+        'nota de voz transcrita',
+      );
+      return { ...stored, messageId, cached: false };
+    })().finally(() => this.transcribing.delete(messageId));
+    this.transcribing.set(messageId, job);
+    return job;
+  }
+
+  /** el audio de un mensaje: primero la bóveda, si no el archivo del proyecto */
+  private async audioFor(
+    chatJid: string,
+    messageId: string,
+  ): Promise<{ buffer: Buffer; mimetype: string; chatJid: string }> {
+    const key = this.stats.canonicalJid(chatJid);
+    const msg = this.mergedVault()
+      .get(key)
+      ?.messages.find((m) => m.id === messageId);
+    if (msg) {
+      if (msg.kind !== 'voice' && msg.kind !== 'audio')
+        throw new HttpError(400, 'not_audio', 'Ese mensaje no es una nota de voz');
+      const media = await this.personalMedia(chatJid, messageId);
+      if (media.thumbnail)
+        throw new HttpError(410, 'media_expired', 'El audio ya no se puede bajar de WhatsApp');
+      return { buffer: media.buffer, mimetype: media.mimetype, chatJid: key };
+    }
+    const pj = this.canon(normalizeJid(chatJid));
+    const rec = this.archive.tracked(pj) ? this.archive.get(pj, messageId) : null;
+    if (!rec) throw new HttpError(404, 'message_not_found', 'Mensaje no encontrado');
+    if (rec.kind !== 'voice' && rec.kind !== 'audio')
+      throw new HttpError(400, 'not_audio', 'Ese mensaje no es una nota de voz');
+    const media = await this.projectMedia(pj, messageId);
+    return { buffer: media.buffer, mimetype: media.mimetype, chatJid: pj };
   }
 
   /** jid con el que se identifica un chat (LID y número = el mismo) */
@@ -316,7 +453,8 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     if (this.stats.summary().state === 'complete') this.vault.prune();
     const vaultEntries = this.vault.takeDirty();
     const archiveEntries = this.archive.takeDirty();
-    const entries = { ...vaultEntries, ...archiveEntries };
+    const transcriptEntries = this.takeDirtyTranscripts();
+    const entries = { ...vaultEntries, ...archiveEntries, ...transcriptEntries };
     const keys = Object.keys(entries);
     if (!keys.length) return;
     try {
@@ -325,6 +463,8 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     } catch (err) {
       this.vault.markDirty(Object.keys(vaultEntries));
       this.archive.markDirty(Object.keys(archiveEntries));
+      for (const k of Object.keys(transcriptEntries))
+        this.transcriptsDirty.add(k.slice(TRANSCRIPT_PREFIX.length));
       this.log.error({ err }, 'no se pudieron guardar los mensajes de "Mi vista"');
       this.scheduleVaultPersist();
     }
@@ -343,6 +483,23 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       this.log.warn({ err }, 'no se pudieron cargar los mensajes de "Mi vista"');
     }
     try {
+      const keys = await this.deps.store.listAuthKeys(this.id, TRANSCRIPT_PREFIX);
+      if (keys.length) {
+        for (const [k, v] of await this.deps.store.readAuth(this.id, keys)) {
+          try {
+            this.transcripts.set(
+              k.slice(TRANSCRIPT_PREFIX.length),
+              JSON.parse(v) as StoredTranscript,
+            );
+          } catch {
+            // entrada corrupta: se ignora
+          }
+        }
+      }
+    } catch (err) {
+      this.log.warn({ err }, 'no se pudieron cargar las transcripciones');
+    }
+    try {
       const keys = (await this.deps.store.listAuthKeys(this.id, ARCHIVE_PREFIX)).filter(
         (k) => !k.startsWith('archive:media:'),
       );
@@ -358,6 +515,8 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
 
   private resetVault(): void {
     this.vault = new MessageVault((v) => JSON.stringify(v, BufferJSON.replacer));
+    this.transcripts.clear();
+    this.transcriptsDirty.clear();
     this.archive = new ChatArchive((v) => JSON.stringify(v, BufferJSON.replacer));
     if (this.exportTimer) clearTimeout(this.exportTimer);
     this.exportTimer = null;
@@ -747,6 +906,8 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       ...rest,
       sender: { ...sender, name: this.personName(sender, r.fromMe, names) },
     };
+    const tr = this.transcripts.get(r.id);
+    if (tr) out.transcript = tr.text;
     if (withRaw) out.raw = parseRaw(rawJson);
     return out;
   }
@@ -890,6 +1051,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       storeDays: VAULT_WINDOW_DAYS,
       storePerChat: VAULT_PER_CHAT,
       sendEnabled: Boolean(this.deps.allowSend),
+      transcribeEnabled: Boolean(this.deps.transcriber),
     };
   }
 
@@ -932,6 +1094,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       media: m.media,
       location: m.location ?? null,
       ...(m.edited ? { edited: true } : {}),
+      ...(this.transcripts.has(m.id) ? { transcript: this.transcripts.get(m.id)!.text } : {}),
     };
   }
 
@@ -957,7 +1120,9 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       if (only && key !== only) continue;
       for (const m of v.messages) {
         if (m.ts < cutoff) continue;
-        const hay = fold(`${m.text ?? ''} ${m.media?.fileName ?? ''}`);
+        const hay = fold(
+          `${m.text ?? ''} ${m.media?.fileName ?? ''} ${this.transcripts.get(m.id)?.text ?? ''}`,
+        );
         if (terms.every((t) => hay.includes(t))) found.push({ key, msgs: v.messages, m });
       }
     }

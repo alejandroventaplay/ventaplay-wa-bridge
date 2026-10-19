@@ -143,6 +143,8 @@ export interface PersonalVaultInfo {
   storePerChat?: number;
   /** el dueño habilitó el envío (ALLOW_SEND): solo con confirmación y con límites */
   sendEnabled?: boolean;
+  /** se pueden transcribir notas de voz (Whisper local) */
+  transcribeEnabled?: boolean;
 }
 
 export type MessageKind =
@@ -187,6 +189,8 @@ export interface ChatMessage {
   /** coordenadas, si es una ubicación */
   location?: { lat: number; lng: number; name?: string | null } | null;
   edited?: boolean;
+  /** nota de voz pasada a texto (Whisper local), si ya se transcribió */
+  transcript?: string;
 }
 
 export interface PersonalChat {
@@ -365,8 +369,24 @@ export interface ArchivedMessage {
   source: 'history' | 'live' | 'sent' | 'vault';
   capturedAt: number;
   updatedAt: number;
+  /** nota de voz pasada a texto (Whisper local), si ya se transcribió */
+  transcript?: string;
   /** mensaje original de WhatsApp (JSON) — solo si se pide con ?raw=1 */
   raw?: unknown;
+}
+
+/** resultado de transcribir una nota de voz */
+export interface VoiceTranscript {
+  messageId: string;
+  chatJid: string;
+  text: string;
+  model: string;
+  /** segundos de audio */
+  seconds: number;
+  /** epoch ms */
+  at: number;
+  /** ya estaba transcrita */
+  cached: boolean;
 }
 
 export interface ProjectMessages {

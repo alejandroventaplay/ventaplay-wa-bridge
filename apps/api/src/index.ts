@@ -10,6 +10,7 @@ import { FileSessionStore } from './store/file-store.js';
 import { PgSessionStore } from './store/pg-store.js';
 import type { SessionStore } from './store/types.js';
 import { createBaileysFactory, createMediaDownloader } from './wa/baileys-socket.js';
+import { createFakeTranscriber, createWhisperTranscriber } from './transcribe/transcriber.js';
 import { createSimulator } from './wa/simulator.js';
 
 async function main(): Promise<void> {
@@ -70,6 +71,18 @@ async function main(): Promise<void> {
         allowHistoryFetch: Boolean(config.OWNER_PHONE),
       });
 
+  // ---- notas de voz → texto (Whisper local; solo para el número dueño)
+  const transcriber =
+    config.TRANSCRIBE && config.OWNER_PHONE
+      ? simulator
+        ? createFakeTranscriber('Hola, esta es una nota de voz del simulador.')
+        : createWhisperTranscriber({
+            model: config.WHISPER_MODEL,
+            cacheDir: resolve(join(config.DATA_DIR, 'modelos')),
+            logger,
+          })
+      : null;
+
   const manager = new SessionManager({
     store,
     socketFactory,
@@ -82,6 +95,8 @@ async function main(): Promise<void> {
     exportDir: config.OWNER_PHONE
       ? resolve(config.PROJECTS_DIR ?? join(config.DATA_DIR, 'proyectos'))
       : null,
+    transcriber: transcriber,
+    autoTranscribe: config.AUTO_TRANSCRIBE,
   });
   if (config.OWNER_PHONE)
     logger.info('"Mi vista" activa para el número del dueño (mensajes cifrados en disco)');

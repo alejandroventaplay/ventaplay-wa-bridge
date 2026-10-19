@@ -19,7 +19,7 @@ import { author, body, chatLine, chatTitle, phone, transcript, when } from './fo
  * del dueño a través del WA Bridge que corre en su Mac. Enviar exige confirmación.
  */
 const client = new BridgeClient(await loadConfig());
-const server = new McpServer({ name: 'whatsapp-alejandro', version: '0.2.0' });
+const server = new McpServer({ name: 'whatsapp-alejandro', version: '0.3.0' });
 
 type Text = { content: { type: 'text'; text: string }[]; isError?: boolean };
 const text = (t: string): Text => ({ content: [{ type: 'text', text: t }] });
@@ -138,6 +138,50 @@ server.registerTool(
         `${r.messages.length} mensajes${r.hasMore ? ` (hay más antiguos: usa antes_de=${new Date(r.messages[0]!.timestamp).toISOString()})` : ''}:`,
         transcript(r.chat, r.messages),
       ].join('\n');
+    }),
+);
+
+server.registerTool(
+  'whatsapp_transcribir',
+  {
+    title: 'Transcribir notas de voz',
+    description:
+      'Pasa a texto las últimas notas de voz de un chat (Whisper corriendo en el Mac de Alejandro; el audio no sale del equipo). Devuelve fecha, quién habló y el texto. Las ya transcritas vienen guardadas. La primera vez baja el modelo (~500 MB) y puede tardar unos minutos.',
+    inputSchema: {
+      chat: z.string().min(1).describe('nombre del contacto o grupo, número o jid'),
+      cantidad: z
+        .number()
+        .int()
+        .min(1)
+        .max(20)
+        .default(3)
+        .describe('cuántas notas de voz, de la más nueva hacia atrás'),
+      forzar: z.boolean().default(false).describe('volver a transcribir aunque ya exista'),
+    },
+    annotations: READ,
+  },
+  ({ chat, cantidad, forzar }) =>
+    run(async () => {
+      const c = await findChat(chat);
+      const r = await client.messages(c.jid, 300);
+      const voices = r.messages
+        .filter((m) => m.kind === 'voice' || m.kind === 'audio')
+        .slice(-cantidad);
+      if (!voices.length)
+        return `${chatTitle(r.chat)}\nNo hay notas de voz guardadas en este chat.`;
+      const out: string[] = [chatTitle(r.chat)];
+      for (const m of voices) {
+        const head = `[${when(m.timestamp)}] ${author(m, r.chat.isGroup, r.chat.name)} · ${body({ ...m, text: null, transcript: undefined })}`;
+        try {
+          const t = await client.transcribe(r.chat.jid, m.id, forzar);
+          out.push(`${head}\n“${t.text || '(sin voz reconocible)'}”`);
+        } catch (err) {
+          out.push(
+            `${head}\n(no se pudo transcribir: ${err instanceof Error ? err.message : String(err)})`,
+          );
+        }
+      }
+      return out.join('\n\n');
     }),
 );
 

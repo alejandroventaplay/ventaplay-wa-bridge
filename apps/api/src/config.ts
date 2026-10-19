@@ -70,6 +70,16 @@ const EnvSchema = z.object({
    */
   ALLOW_SEND: bool.default(false),
 
+  /**
+   * Transcribe notas de voz del dueño en el equipo (Whisper local, el audio no sale).
+   * El modelo se baja una vez (~500 MB) a DATA_DIR/modelos.
+   */
+  TRANSCRIBE: bool.default(true),
+  /** transcribe solas las notas de voz que lleguen en vivo */
+  AUTO_TRANSCRIBE: bool.default(true),
+  /** modelo Whisper ONNX de Hugging Face */
+  WHISPER_MODEL: z.string().default('onnx-community/whisper-small'),
+
   /** solo desarrollo local: acciones de una lista cerrada pedidas por archivo (ver src/dev) */
   DEV_RUNNER: bool.default(false),
 });

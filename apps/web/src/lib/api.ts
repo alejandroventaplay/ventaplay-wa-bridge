@@ -6,6 +6,7 @@ import type {
   ProjectMessages,
   SendResult,
   SessionSummary,
+  VoiceTranscript,
 } from '@wa-bridge/shared';
 import { storage } from './storage';
 import { supabase } from './supabase';
@@ -137,6 +138,12 @@ export const api = {
         asDocument: Boolean(opts.asDocument),
       }),
     }),
+  /** pasa a texto una nota de voz (Whisper en el Mac); la primera vez baja el modelo */
+  transcribe: (id: string, jid: string, msgId: string, force = false) =>
+    request<{ transcript: VoiceTranscript }>(
+      `/sessions/${id}/personal/chats/${encodeURIComponent(jid)}/messages/${encodeURIComponent(msgId)}/transcript`,
+      { method: 'POST', body: JSON.stringify({ force }) },
+    ).then((r) => r.transcript),
   /** "Traer toda la conversación": pide al teléfono el historial antiguo del chat */
   fetchHistory: (id: string, jid: string) =>
     request<{ history: HistoryFetchStatus }>(

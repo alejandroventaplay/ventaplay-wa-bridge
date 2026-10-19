@@ -9,12 +9,15 @@ import type {
   ProjectInfo,
   ProjectMessages,
   SessionSummary,
+  VoiceTranscript,
 } from '@wa-bridge/shared';
 import { loadConfig } from '../src/config.js';
 import { createAuthenticator } from '../src/http/auth.js';
 import { buildServer } from '../src/http/server.js';
 import { SessionManager } from '../src/session/manager.js';
 import { VAULT_KEY_PREFIX } from '../src/session/message-vault.js';
+import { TRANSCRIPT_PREFIX } from '../src/session/wa-session.js';
+import { createFakeTranscriber, type Transcriber } from '../src/transcribe/transcriber.js';
 import { createSimulator } from '../src/wa/simulator.js';
 import { silentLogger, tempStore, waitFor } from './helpers.js';
 
@@ -31,7 +34,12 @@ afterEach(async () => {
 
 async function setup(
   ownerPhone: string | null,
-  opts: { allowSend?: boolean; exportDir?: string; openFolder?: (dir: string) => void } = {},
+  opts: {
+    allowSend?: boolean;
+    exportDir?: string;
+    openFolder?: (dir: string) => void;
+    transcriber?: Transcriber;
+  } = {},
 ) {
   const config = loadConfig({ NODE_ENV: 'test', API_TOKEN: TOKEN, WA_DRIVER: 'simulator' });
   const t = await tempStore();
@@ -52,6 +60,7 @@ async function setup(
     downloadMedia: sim.downloadMedia,
     allowSend: opts.allowSend ?? false,
     exportDir: opts.exportDir ?? null,
+    transcriber: opts.transcriber ?? null,
   });
   await manager.init();
   const app = await buildServer({
@@ -508,5 +517,88 @@ describe('Traer toda la conversación', () => {
       headers: auth,
     });
     expect(r.statusCode).toBe(403);
+  });
+});
+
+/** primera nota de voz (y un texto) guardada en algún chat */
+async function findVoice(app: Awaited<ReturnType<typeof setup>>['app'], id: string) {
+  const list = (
+    await app.inject({ url: `/sessions/${id}/personal/chats`, headers: auth })
+  ).json() as PersonalChatList;
+  for (const c of list.items) {
+    const { messages } = (
+      await app.inject({
+        url: `/sessions/${id}/personal/chats/${encodeURIComponent(c.jid)}/messages?limit=300`,
+        headers: auth,
+      })
+    ).json() as PersonalChatMessages;
+    const recent = Date.now() - 30 * 86_400_000;
+    const voice = messages.find((x) => x.kind === 'voice' && x.timestamp > recent);
+    const text = messages.find((x) => x.kind === 'text');
+    if (voice && text) return { jid: c.jid, voice, text };
+  }
+  throw new Error('el simulador no generó notas de voz');
+}
+
+describe('Notas de voz a texto', () => {
+  it('transcribe, guarda, aparece en el chat y en la búsqueda', async () => {
+    const tr = createFakeTranscriber('Hola Ale, el recargo corresponde por pagar fuera de plazo');
+    const { app, manager, store, id } = await setup('56912345678', { transcriber: tr });
+    const list = (
+      await app.inject({ url: `/sessions/${id}/personal/chats`, headers: auth })
+    ).json() as PersonalChatList;
+    expect(list.transcribeEnabled).toBe(true);
+
+    const { jid, voice } = await findVoice(app, id);
+    const url = `/sessions/${id}/personal/chats/${encodeURIComponent(jid)}/messages/${voice.id}/transcript`;
+    const r = await app.inject({ method: 'POST', url, headers: auth, payload: {} });
+    expect(r.statusCode).toBe(200);
+    const t = (r.json() as { transcript: VoiceTranscript }).transcript;
+    expect(t.text).toMatch(/recargo/);
+    expect(t.cached).toBe(false);
+
+    // la segunda vez viene guardada
+    const again = await app.inject({ method: 'POST', url, headers: auth, payload: {} });
+    expect((again.json() as { transcript: VoiceTranscript }).transcript.cached).toBe(true);
+
+    const { messages } = (
+      await app.inject({
+        url: `/sessions/${id}/personal/chats/${encodeURIComponent(jid)}/messages?limit=300`,
+        headers: auth,
+      })
+    ).json() as PersonalChatMessages;
+    expect(messages.find((m) => m.id === voice.id)?.transcript).toMatch(/recargo/);
+
+    const s = await app.inject({
+      url: `/sessions/${id}/personal/search?q=${encodeURIComponent('fuera de plazo')}`,
+      headers: auth,
+    });
+    expect(JSON.stringify(s.json())).toContain(voice.id);
+
+    // queda cifrada en el store
+    await manager.shutdown();
+    expect(await store.listAuthKeys(id, TRANSCRIPT_PREFIX)).toContain(TRANSCRIPT_PREFIX + voice.id);
+  });
+
+  it('rechaza mensajes que no son audio y responde 409 si está apagada', async () => {
+    const { app, id } = await setup('56912345678', { transcriber: createFakeTranscriber() });
+    const { jid, text } = await findVoice(app, id);
+    const r = await app.inject({
+      method: 'POST',
+      url: `/sessions/${id}/personal/chats/${encodeURIComponent(jid)}/messages/${text.id}/transcript`,
+      headers: auth,
+      payload: {},
+    });
+    expect(r.statusCode).toBe(400);
+
+    const off = await setup('56912345678');
+    const v = await findVoice(off.app, off.id);
+    const r2 = await off.app.inject({
+      method: 'POST',
+      url: `/sessions/${off.id}/personal/chats/${encodeURIComponent(v.jid)}/messages/${v.voice.id}/transcript`,
+      headers: auth,
+      payload: {},
+    });
+    expect(r2.statusCode).toBe(409);
   });
 });

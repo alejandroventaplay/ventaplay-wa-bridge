@@ -37,7 +37,7 @@ const LABEL: Record<MessageKind, string> = {
 };
 
 /** el contenido de un mensaje en una línea legible */
-export function body(m: Pick<ChatMessage, 'kind' | 'text' | 'media'>): string {
+export function body(m: Pick<ChatMessage, 'kind' | 'text' | 'media' | 'transcript'>): string {
   if (m.kind === 'text') return m.text ?? '';
   const parts = [LABEL[m.kind]];
   if (m.kind === 'voice' || m.kind === 'audio' || m.kind === 'video') {
@@ -46,6 +46,7 @@ export function body(m: Pick<ChatMessage, 'kind' | 'text' | 'media'>): string {
   }
   if (m.kind === 'document' && m.media?.fileName) parts.push(m.media.fileName);
   if (m.text) parts.push(m.text);
+  if (m.transcript) parts.push(`(transcripción) “${m.transcript}”`);
   return parts.filter(Boolean).join(' · ');
 }
 

@@ -44,6 +44,7 @@ const SearchQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
 });
 const SendBody = z.object({ text: z.string().min(1).max(4096) });
+const TranscriptBody = z.object({ force: z.boolean().optional() });
 /** archivo en base64 (16 MB → ~21,4 MB de texto) */
 const SendMediaBody = z.object({
   data: z.string().min(1),
@@ -336,6 +337,14 @@ export async function buildServer(deps: ServerDeps) {
         .header('cache-control', 'private, max-age=3600')
         .header('x-media-thumbnail', media.thumbnail ? '1' : '0')
         .send(media.buffer);
+    });
+
+    /** pasa a texto una nota de voz (Whisper en el equipo; queda guardada cifrada) */
+    api.post('/sessions/:id/personal/chats/:jid/messages/:msgId/transcript', async (req) => {
+      const { id, jid, msgId } = MediaParams.parse(req.params);
+      const { force } = TranscriptBody.parse(req.body ?? {});
+      const t = await manager.get(id).transcribeMessage(jid, msgId, { force });
+      return { transcript: t };
     });
 
     api.post('/sessions/:id/connect', async (req) => {

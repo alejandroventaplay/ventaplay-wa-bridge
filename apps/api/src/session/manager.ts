@@ -5,6 +5,7 @@ import { emptyStats, type SessionSummary } from '@wa-bridge/shared';
 import type { SessionRecord, SessionStore } from '../store/types.js';
 import type { MediaDownloader, SocketFactory } from '../wa/types.js';
 import { HttpError } from './errors.js';
+import type { Transcriber } from '../transcribe/transcriber.js';
 import { WaSession } from './wa-session.js';
 
 export interface ManagerEvents {
@@ -28,6 +29,9 @@ export interface SessionManagerOptions {
   allowSend?: boolean;
   /** carpeta donde se exportan los proyectos (chats aislados) */
   exportDir?: string | null;
+  /** transcribe notas de voz en el equipo */
+  transcriber?: Transcriber | null;
+  autoTranscribe?: boolean;
 }
 
 /** Dueño de todas las sesiones vivas del proceso. */
@@ -140,6 +144,8 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
       downloadMedia: this.opts.downloadMedia ?? null,
       allowSend: this.opts.allowSend ?? false,
       exportDir: this.opts.exportDir ?? null,
+      transcriber: this.opts.transcriber ?? null,
+      autoTranscribe: this.opts.autoTranscribe ?? false,
     });
     session.on('update', (summary) => this.emit('update', summary));
     this.sessions.set(record.id, session);

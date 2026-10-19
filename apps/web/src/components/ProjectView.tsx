@@ -308,7 +308,15 @@ export function ProjectView({ session, jid }: { session: SessionSummary; jid: st
                           Eliminado · decía: {m.edits.at(-1)?.previousText ?? '—'}
                         </span>
                       ) : (
-                        (m.text ?? <span className="text-ink-soft">—</span>)
+                        (m.text ??
+                        (m.transcript ? (
+                          <span>
+                            <span className="text-ink-soft">🎤 </span>
+                            {m.transcript}
+                          </span>
+                        ) : (
+                          <span className="text-ink-soft">—</span>
+                        )))
                       )}
                     </span>
                   </td>
@@ -450,6 +458,14 @@ function Detail({
         </header>
         <div className="flex-1 space-y-4 overflow-y-auto p-5 text-sm">
           {m.text && <p className="rounded-xl bg-canvas p-3 whitespace-pre-wrap">{m.text}</p>}
+          {m.transcript && (
+            <p className="rounded-xl bg-canvas p-3 whitespace-pre-wrap">
+              <span className="mb-1 block text-[11px] font-bold tracking-wide text-violeta uppercase">
+                Transcripción de la nota de voz
+              </span>
+              {m.transcript}
+            </p>
+          )}
           {m.media && (
             <div className="rounded-xl border border-line p-3">
               {url && m.kind === 'image' ? (

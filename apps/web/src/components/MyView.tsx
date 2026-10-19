@@ -17,6 +17,7 @@ import {
   Mic,
   Search,
   Smile,
+  Sparkles,
   UserRound,
   Users,
 } from 'lucide-react';
@@ -857,23 +858,60 @@ function AudioView({
 }) {
   const { blob, error } = useMedia(sessionId, chatJid, m.id);
   const voice = m.kind === 'voice';
+  const [fresh, setFresh] = useState<string | null>(null);
+  const text = fresh ?? m.transcript ?? null;
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  async function transcribe() {
+    setBusy(true);
+    setFailed(null);
+    try {
+      setFresh((await api.transcribe(sessionId, chatJid, m.id)).text);
+    } catch (e) {
+      setFailed(e instanceof Error ? e.message : 'No se pudo transcribir');
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
-    <div className="flex min-w-[240px] items-center gap-2 py-1">
-      <span
-        className={`grid size-10 shrink-0 place-items-center rounded-full ${
-          voice ? 'bg-turquesa text-white' : 'bg-[#ff8f2c] text-white'
-        }`}
-      >
-        {voice ? <Mic className="size-5" /> : <Headphones className="size-5" />}
-      </span>
-      {blob ? (
-        <audio src={blob.url} controls preload="metadata" className="h-9 w-56 max-w-full" />
-      ) : (
-        <span className="text-xs text-ink-soft">
-          {error ? 'Audio no disponible' : <Spinner className="size-4" />}{' '}
-          {fmtDuration(m.media?.seconds)}
+    <div className="py-1">
+      <div className="flex min-w-[240px] items-center gap-2">
+        <span
+          className={`grid size-10 shrink-0 place-items-center rounded-full ${
+            voice ? 'bg-turquesa text-white' : 'bg-[#ff8f2c] text-white'
+          }`}
+        >
+          {voice ? <Mic className="size-5" /> : <Headphones className="size-5" />}
         </span>
+        {blob ? (
+          <audio src={blob.url} controls preload="metadata" className="h-9 w-56 max-w-full" />
+        ) : (
+          <span className="text-xs text-ink-soft">
+            {error ? 'Audio no disponible' : <Spinner className="size-4" />}{' '}
+            {fmtDuration(m.media?.seconds)}
+          </span>
+        )}
+      </div>
+      {text !== null ? (
+        <p className="mt-1.5 max-w-[320px] rounded-lg bg-black/5 px-2.5 py-1.5 text-[13.5px] leading-snug whitespace-pre-wrap text-ink">
+          <span className="mr-1 text-[11px] font-bold tracking-wide text-violeta uppercase">
+            Transcripción
+          </span>
+          {text || '(sin voz reconocible)'}
+        </p>
+      ) : (
+        <button
+          type="button"
+          onClick={() => void transcribe()}
+          disabled={busy}
+          className="mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold text-violeta hover:bg-violeta/10 disabled:opacity-60"
+          title="Pasa el audio a texto en tu Mac (Whisper local)"
+        >
+          {busy ? <Spinner className="size-3.5" /> : <Sparkles className="size-3.5" />}
+          {busy ? 'Transcribiendo…' : 'Transcribir'}
+        </button>
       )}
+      {failed && <p className="mt-1 text-xs text-danger">{failed}</p>}
     </div>
   );
 }

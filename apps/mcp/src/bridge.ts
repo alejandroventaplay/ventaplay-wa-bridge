@@ -8,6 +8,7 @@ import type {
   SearchResult,
   SendResult,
   SessionSummary,
+  VoiceTranscript,
 } from '@wa-bridge/shared';
 
 /** Cómo llegar al WA Bridge que corre en el Mac. */
@@ -118,6 +119,16 @@ export class BridgeClient {
     return this.req(
       `/sessions/${await this.sid()}/personal/chats/${encodeURIComponent(jid)}/messages?${q}`,
     );
+  }
+
+  /** pasa a texto una nota de voz (la primera vez baja el modelo: puede tardar) */
+  async transcribe(jid: string, messageId: string, force = false): Promise<VoiceTranscript> {
+    const r = await this.req<{ transcript: VoiceTranscript }>(
+      `/sessions/${await this.sid()}/personal/chats/${encodeURIComponent(jid)}/messages/${encodeURIComponent(messageId)}/transcript`,
+      { method: 'POST', body: JSON.stringify({ force }) },
+      300_000,
+    );
+    return r.transcript;
   }
 
   async search(
