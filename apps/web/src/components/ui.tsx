@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import { LockKeyhole, LogOut, X } from 'lucide-react';
-import type { SessionStatus } from '@wa-bridge/shared';
+import { Bot, LockKeyhole, LogOut, X } from 'lucide-react';
+import type { SessionStatus, SessionSummary } from '@wa-bridge/shared';
 import { useAuth } from '../hooks/auth';
 import { initials } from '../lib/format';
 
@@ -14,40 +14,61 @@ export function Logo({ className = '' }: { className?: string }) {
   );
 }
 
-export function ReadOnlyBadge({
+/**
+ * Qué puede hacer este WhatsApp: respaldo (solo estadísticas), asistente sin envío,
+ * o asistente que envía (siempre con tu confirmación y con límites).
+ */
+export function ModeBadge({
+  session,
   compact = false,
-  sendEnabled = false,
 }: {
+  session: Pick<SessionSummary, 'assistant'>;
   compact?: boolean;
-  sendEnabled?: boolean;
 }) {
-  if (sendEnabled)
+  const a = session.assistant;
+  if (a?.send)
     return (
       <span
         className="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-800"
-        title="Lectura de todo. Envío de texto solo desde tu número, con tu confirmación y con límites"
+        title="Modo asistente: lee y busca tus chats y puede enviar desde tu número, siempre con tu confirmación y con límites"
       >
-        <LockKeyhole className="size-3.5" aria-hidden />
-        {compact ? 'Envío con tu OK' : 'Lectura · envío solo con tu confirmación'}
+        <Bot className="size-3.5" aria-hidden />
+        {compact ? 'Asistente · envía con tu OK' : 'Asistente · envío solo con tu confirmación'}
+      </span>
+    );
+  if (a)
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 rounded-full border border-violeta/20 bg-violeta-5 px-2.5 py-1 text-xs font-bold text-violeta"
+        title="Modo asistente: lee, busca y transcribe; el envío está apagado"
+      >
+        <Bot className="size-3.5" aria-hidden />
+        {compact ? 'Asistente · sin envío' : 'Asistente · lectura, sin envío'}
       </span>
     );
   return (
     <span
       className="inline-flex items-center gap-1.5 rounded-full border border-turquesa/30 bg-turquesa-10 px-2.5 py-1 text-xs font-bold text-turquesa-140"
-      title="Este servicio nunca envía mensajes ni marca chats como leídos"
+      title="Respaldo: solo estadísticas; nunca envía mensajes ni guarda su contenido"
     >
       <LockKeyhole className="size-3.5" aria-hidden />
-      {compact ? 'Solo lectura' : 'Solo lectura · nunca enviamos mensajes'}
+      {compact ? 'Respaldo · solo lectura' : 'Respaldo · nunca enviamos mensajes'}
     </span>
   );
 }
 
-export function AppShell({ children }: { children: ReactNode }) {
+export function AppShell({
+  children,
+  session,
+}: {
+  children: ReactNode;
+  /** la sesión abierta: el sello muestra su modo (en el inicio no se muestra) */
+  session?: Pick<SessionSummary, 'assistant'> | null;
+}) {
   const { state, logout } = useAuth();
   const email = state.phase === 'signed-in' ? state.email : null;
   const driver = state.phase === 'signed-in' ? state.health.driver : null;
   const authMode = state.phase === 'signed-in' ? state.health.auth : null;
-  const sendEnabled = state.phase === 'signed-in' && Boolean(state.health.sendEnabled);
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-20 border-b border-line/80 bg-white/85 backdrop-blur">
@@ -64,9 +85,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             </span>
           )}
           <div className="ml-auto flex items-center gap-3">
-            <span className="hidden md:inline-flex">
-              <ReadOnlyBadge compact sendEnabled={sendEnabled} />
-            </span>
+            {session && (
+              <span className="hidden md:inline-flex">
+                <ModeBadge compact session={session} />
+              </span>
+            )}
             {email && (
               <span
                 className="grid size-8 place-items-center rounded-full bg-violeta text-xs font-bold text-white"

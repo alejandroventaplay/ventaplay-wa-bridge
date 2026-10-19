@@ -659,7 +659,7 @@ function ChatPanel({
         <footer className="flex items-center gap-2 border-t border-line bg-[#f0f2f5] px-4 py-3 text-sm text-ink-soft">
           <Smile className="size-5 opacity-50" />
           <span className="flex-1 rounded-lg bg-white px-3 py-2 text-ink-soft/80">
-            Solo lectura · el envío no está habilitado en este equipo
+            Envío apagado · actívalo en Asistente (arriba a la derecha)
           </span>
         </footer>
       )}

@@ -111,7 +111,7 @@ export function SessionPage() {
     (session.profile !== null && ['connecting', 'error', 'logged_out'].includes(session.status));
 
   return (
-    <AppShell>
+    <AppShell session={session}>
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <Link to="/" className="btn-secondary px-3 py-2" aria-label="Volver">
           <ArrowLeft className="size-4" />

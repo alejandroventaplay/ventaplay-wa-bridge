@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { KeyRound, Mail } from 'lucide-react';
 import { ALLOWED_DOMAIN, useAuth } from '../hooks/auth';
 import { supabase } from '../lib/supabase';
-import { Logo, ReadOnlyBadge, Spinner } from '../components/ui';
+import { Logo, Spinner } from '../components/ui';
 
 export function LoginPage() {
   const { state, loginWithToken, sendMagicLink, loginWithGoogle } = useAuth();
@@ -41,11 +41,8 @@ export function LoginPage() {
         <Logo />
         <h1 className="mt-8 text-2xl font-black">WA Bridge</h1>
         <p className="mt-1 text-sm text-ink-soft">
-          Conecta un WhatsApp por QR para migrar contactos y chats a VentaPlay.
+          Vincula tu WhatsApp por QR: respaldo de contactos y chats, o tu asistente personal.
         </p>
-        <div className="mt-4">
-          <ReadOnlyBadge />
-        </div>
 
         {sent ? (
           <div className="mt-8 rounded-xl bg-violeta-5 p-4 text-sm">
