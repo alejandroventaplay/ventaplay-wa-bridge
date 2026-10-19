@@ -21,6 +21,7 @@ import type { ArchivedMessage, MessageKind, ProjectInfo, SessionSummary } from '
 import { api, openFolderCommand, projectMediaBlob } from '../lib/api';
 import { fmtAgo, fmtBytes, fmtDateTime, fmtNumber, fmtPhone } from '../lib/format';
 import { Spinner } from './ui';
+import { isPdf, pdfFirstPage } from '../lib/pdfPreview';
 import { ProjectMetrics } from './ProjectMetrics';
 
 const KIND_ES: Record<MessageKind, string> = {
@@ -473,6 +474,15 @@ function Detail({
                 <a href={url} target="_blank" rel="noreferrer">
                   <img src={url} alt="" className="max-h-72 rounded-lg" />
                 </a>
+              ) : url && isPdf(m.media.mimetype, m.media.fileName) ? (
+                <a href={url} target="_blank" rel="noreferrer" title="Abrir el PDF completo">
+                  <PdfPage
+                    cacheKey={m.id}
+                    src={url}
+                    width={384}
+                    className="max-h-72 rounded-lg border border-line"
+                  />
+                </a>
               ) : null}
               <p className="mt-2 flex items-center gap-2 font-bold">
                 {m.kind === 'image' ? (
@@ -578,7 +588,8 @@ function MediaChip({ sessionId, jid, m }: { sessionId: string; jid: string; m: A
   const [ref, setRef] = useState<HTMLSpanElement | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
-  const canShow = visual && m.kind !== 'video' && Boolean(m.media?.downloaded);
+  const pdf = !visual && isPdf(m.media?.mimetype, m.media?.fileName);
+  const canShow = (pdf || (visual && m.kind !== 'video')) && Boolean(m.media?.downloaded);
 
   useEffect(() => {
     if (!ref || !canShow) return;
@@ -613,7 +624,15 @@ function MediaChip({ sessionId, jid, m }: { sessionId: string; jid: string; m: A
   return (
     <span ref={setRef} className="mb-1 flex items-center gap-2">
       <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-lg border border-line bg-canvas text-violeta">
-        {url && !failed ? (
+        {url && !failed && pdf ? (
+          <PdfPage
+            cacheKey={m.id}
+            src={url}
+            width={80}
+            className="size-full object-cover object-top"
+            fallback={<FileText className="size-4" />}
+          />
+        ) : url && !failed ? (
           <img src={url} alt="" className="size-full object-cover" loading="lazy" />
         ) : visual ? (
           <ImageIcon className="size-4" />
@@ -628,5 +647,41 @@ function MediaChip({ sessionId, jid, m }: { sessionId: string; jid: string; m: A
         </span>
       </span>
     </span>
+  );
+}
+
+/** primera página de un PDF como imagen (pdf.js), igual que la vista previa de una foto */
+function PdfPage({
+  cacheKey,
+  src,
+  width,
+  className,
+  fallback,
+}: {
+  cacheKey: string;
+  src: string;
+  width: number;
+  className?: string;
+  fallback?: ReactNode;
+}) {
+  const [img, setImg] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    pdfFirstPage(cacheKey, src, width)
+      .then((p) => alive && setImg(p.url))
+      .catch(() => alive && setFailed(true));
+    return () => {
+      alive = false;
+    };
+  }, [cacheKey, src, width]);
+  if (img) return <img src={img} alt="Primera página del PDF" className={className} />;
+  if (failed) return <>{fallback ?? null}</>;
+  return fallback ? (
+    <>{fallback}</>
+  ) : (
+    <div className="grid h-48 w-72 place-items-center rounded-lg bg-canvas text-violeta">
+      <Spinner className="size-5" />
+    </div>
   );
 }
