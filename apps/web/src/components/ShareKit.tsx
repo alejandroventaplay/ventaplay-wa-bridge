@@ -1,6 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import {
-  BookOpen,
   Check,
   Download,
   Package,
@@ -141,9 +140,7 @@ export function ShareKit() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <DownloadButton file="INSTALAR.md">
-            <BookOpen className="size-4" /> Guía
-          </DownloadButton>
+          <DownloadButton file="INSTALAR.md">Guía (INSTALAR.md)</DownloadButton>
           <DownloadButton file="wa-bridge-kit.zip" primary>
             Kit completo (.zip)
           </DownloadButton>
