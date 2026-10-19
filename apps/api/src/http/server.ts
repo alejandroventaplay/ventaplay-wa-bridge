@@ -8,6 +8,15 @@ import { buildContactsWorkbook, contactsFileName } from '../export/contacts-xlsx
 import { HttpError, type SessionManager } from '../session/manager.js';
 import { StatsAggregator } from '../session/stats.js';
 import { openFolder } from '../dev/open-folder.js';
+import {
+  bridgeZip,
+  connectorMcpb,
+  connectorVersion,
+  findRepoRoot,
+  installGuide,
+  kitZip,
+  skillZip,
+} from '../downloads/packages.js';
 import type { Simulator } from '../wa/simulator.js';
 import type { Authenticator, Principal } from './auth.js';
 
@@ -26,6 +35,8 @@ export interface ServerDeps {
   simulator?: Simulator | null;
   /** para tests: reemplaza la apertura real de carpetas */
   openFolder?: (dir: string) => void;
+  /** carpeta del proyecto (para los descargables); por defecto se busca desde el cwd */
+  repoRoot?: string | null;
 }
 
 const IdParams = z.object({ id: z.string().uuid() });
@@ -373,6 +384,57 @@ export async function buildServer(deps: ServerDeps) {
       );
       return { session: await manager.setAssistant(id, body) };
     });
+
+    // ---------------------------------------------- descargables para compartir
+
+    const root = deps.repoRoot ?? findRepoRoot();
+    const sendZip = (reply: FastifyReply, name: string, type: string, data: Buffer) =>
+      reply
+        .header('content-type', type)
+        .header('content-disposition', `attachment; filename="${name}"`)
+        .header('cache-control', 'no-store')
+        .send(data);
+    const needRoot = () => {
+      if (!root)
+        throw new HttpError(404, 'no_repo', 'No encuentro la carpeta del proyecto en este equipo');
+      return root;
+    };
+
+    /** qué se puede descargar (y versión del conector) */
+    api.get('/downloads', async () => ({
+      available: Boolean(root),
+      connectorVersion: root ? await connectorVersion(root) : null,
+    }));
+    /** el proyecto para instalarlo en otro equipo (sin mensajes, credenciales ni .env) */
+    api.get('/downloads/wa-bridge.zip', async (_req, reply) =>
+      sendZip(reply, 'ventaplay-wa-bridge.zip', 'application/zip', await bridgeZip(needRoot())),
+    );
+    /** el conector de Claude Desktop */
+    api.get('/downloads/whatsapp-asistente.mcpb', async (_req, reply) =>
+      sendZip(
+        reply,
+        'WhatsApp-Asistente.mcpb',
+        'application/octet-stream',
+        await connectorMcpb(needRoot()),
+      ),
+    );
+    /** las 3 piezas + la guía en un solo zip, para mandárselo a alguien */
+    api.get('/downloads/wa-bridge-kit.zip', async (_req, reply) =>
+      sendZip(reply, 'WA-Bridge-kit.zip', 'application/zip', await kitZip(needRoot())),
+    );
+    /** la guía de instalación */
+    api.get('/downloads/INSTALAR.md', async (_req, reply) => {
+      const md = await installGuide(needRoot());
+      if (!md) throw new HttpError(404, 'no_guide', 'Falta INSTALAR.md');
+      return reply
+        .header('content-type', 'text/markdown; charset=utf-8')
+        .header('content-disposition', 'attachment; filename="INSTALAR.md"')
+        .send(md);
+    });
+    /** la skill para subir a Claude */
+    api.get('/downloads/skill-whatsapp-asistente.zip', async (_req, reply) =>
+      sendZip(reply, 'skill-whatsapp-asistente.zip', 'application/zip', await skillZip(needRoot())),
+    );
 
     api.post('/sessions/:id/connect', async (req) => {
       const { id } = IdParams.parse(req.params);

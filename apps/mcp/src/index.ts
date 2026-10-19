@@ -19,7 +19,7 @@ import { author, body, chatLine, chatTitle, phone, transcript, when } from './fo
  * persona que activó el modo asistente, a través del Bridge que corre en su equipo. Enviar exige confirmación.
  */
 const client = new BridgeClient(await loadConfig());
-const server = new McpServer({ name: 'whatsapp-alejandro', version: '0.4.0' });
+const server = new McpServer({ name: 'whatsapp-asistente', version: '0.5.0' });
 
 type Text = { content: { type: 'text'; text: string }[]; isError?: boolean };
 const text = (t: string): Text => ({ content: [{ type: 'text', text: t }] });

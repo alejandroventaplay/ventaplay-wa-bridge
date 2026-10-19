@@ -8,6 +8,15 @@ y **lee** sus contactos, chats e historial para migrarlos a VentaPlay.
 > socket (`apps/api/src/wa/read-only.ts`), un test revisa que sigan bloqueados y una
 > regla de ESLint impide llamarlos.
 
+## Instalarlo en otro equipo (compartir)
+
+En la página de inicio del Bridge, sección **Instala y comparte tu asistente**, están los
+descargables (se arman al vuelo desde esta carpeta, sin `.env`, mensajes ni `node_modules`):
+el **Bridge** (`ventaplay-wa-bridge.zip`), el **conector** para Claude Desktop
+(`WhatsApp-Asistente.mcpb`), la **skill** (`skill-whatsapp-asistente.zip`) y el **kit
+completo** con la guía. La guía paso a paso está en [`INSTALAR.md`](INSTALAR.md).
+Lanzadores: `Iniciar-WA-Bridge.command` (Mac) e `Iniciar-WA-Bridge.cmd` (Windows).
+
 ## Mi vista (solo tu número)
 
 Si el WhatsApp vinculado es el del dueño (`OWNER_PHONE` en `apps/api/.env`), la

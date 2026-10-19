@@ -110,6 +110,10 @@ export const api = {
   /** baja el Excel de contactos y lo guarda con el nombre que propone la API */
   downloadContactsXlsx: (id: string, modo: 'util' | 'completo') =>
     download(`/sessions/${id}/export/contacts.xlsx?modo=${modo}`),
+  /** descargables para instalar el Bridge, el conector y la skill en otro equipo */
+  downloadsInfo: () =>
+    request<{ available: boolean; connectorVersion: string | null }>('/downloads'),
+  download: (file: string) => download(`/downloads/${file}`),
   /** Mi vista: chats con actividad en los últimos 30 días */
   personalChats: (id: string) => request<PersonalChatList>(`/sessions/${id}/personal/chats`),
   /** Mi vista: últimos mensajes guardados de un chat */

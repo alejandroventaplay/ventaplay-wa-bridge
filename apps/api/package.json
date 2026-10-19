@@ -18,6 +18,7 @@
     "baileys": "7.0.0-rc14",
     "exceljs": "4.4.0",
     "fastify": "^5.12.5",
+    "fflate": "0.8.2",
     "https-proxy-agent": "^9.1.0",
     "jose": "^6.2.12",
     "ogg-opus-decoder": "1.7.5",

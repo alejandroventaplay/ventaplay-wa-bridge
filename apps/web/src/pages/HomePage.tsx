@@ -6,6 +6,7 @@ import { useNow, useSessionsStream } from '../hooks/streams';
 import { api } from '../lib/api';
 import { fmtAgo, fmtNumber, fmtPhone } from '../lib/format';
 import { AppShell, Avatar, Dialog, Spinner, StatusBadge } from '../components/ui';
+import { ShareKit } from '../components/ShareKit';
 
 export function HomePage() {
   const { sessions, loaded } = useSessionsStream();
@@ -17,7 +18,8 @@ export function HomePage() {
         <div>
           <h1 className="text-3xl font-black tracking-tight">WhatsApp conectados</h1>
           <p className="mt-1 text-ink-soft">
-            Vincula el WhatsApp de un cliente para copiar sus contactos y chats.
+            Vincula tu WhatsApp como asistente, o el de un cliente como respaldo de contactos y
+            chats.
           </p>
         </div>
         <button className="btn-primary" onClick={() => setOpen(true)}>
@@ -40,6 +42,8 @@ export function HomePage() {
           </ul>
         )}
       </div>
+
+      <ShareKit />
 
       <CreateDialog open={open} onClose={() => setOpen(false)} />
     </AppShell>

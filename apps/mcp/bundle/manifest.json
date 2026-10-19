@@ -1,10 +1,10 @@
 {
   "manifest_version": "0.3",
-  "name": "whatsapp-alejandro",
-  "display_name": "WhatsApp de Alejandro",
-  "version": "0.4.0",
-  "description": "Lee, busca y resume tu WhatsApp a través del VentaPlay WA Bridge de tu Mac. Enviar exige tu confirmación.",
-  "long_description": "Conecta a Claude con el WA Bridge que corre en tu Mac (http://localhost:4010). Herramientas: estado, listar chats, leer chat, buscar, pendientes por responder y enviar (solo con confirmación y con límites). Toma el token del archivo apps/api/.env del Bridge, no hay que pegar nada.",
+  "name": "whatsapp-asistente",
+  "display_name": "WhatsApp Asistente",
+  "version": "0.5.0",
+  "description": "Lee, busca, transcribe y resume tu WhatsApp a través del WA Bridge de tu computador. Enviar exige tu confirmación.",
+  "long_description": "Conecta a Claude con el WA Bridge que corre en tu computador (http://localhost:4010), con el modo asistente activado. Herramientas: estado, listar chats, leer chat, buscar, pendientes por responder, transcribir notas de voz y enviar (solo con confirmación y con límites). Toma el token del archivo apps/api/.env del Bridge si existe; no hay que pegar nada.",
   "author": {
     "name": "VentaPlay",
     "email": "alejandro@ventaplay.com",
@@ -25,7 +25,7 @@
     "bridge_dir": {
       "type": "directory",
       "title": "Carpeta del WA Bridge",
-      "description": "Donde está el proyecto (se lee apps/api/.env para el token y el puerto)",
+      "description": "La carpeta ventaplay-wa-bridge que descomprimiste (de ahí se lee apps/api/.env para el token y el puerto)",
       "default": "${HOME}/ventaplay-wa-bridge",
       "required": true
     }
@@ -65,7 +65,7 @@
     }
   ],
   "compatibility": {
-    "platforms": ["darwin"],
+    "platforms": ["darwin", "win32"],
     "runtimes": {
       "node": ">=20.0.0"
     }
