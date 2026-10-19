@@ -300,10 +300,8 @@ export function ProjectView({ session, jid }: { session: SessionSummary; jid: st
                   </td>
                   <td className="px-2 py-2.5 whitespace-nowrap">{KIND_ES[m.kind]}</td>
                   <td className="px-2 py-2.5">
-                    {m.media?.fileName && (
-                      <span className="mb-0.5 flex items-center gap-1 text-xs font-bold text-violeta">
-                        <FileText className="size-3.5" /> {m.media.fileName}
-                      </span>
+                    {m.media && m.kind !== 'voice' && m.kind !== 'audio' && (
+                      <MediaChip sessionId={id} jid={jid} m={m} />
                     )}
                     <span className="line-clamp-2 break-words whitespace-pre-wrap">
                       {m.deleted ? (
@@ -317,7 +315,7 @@ export function ProjectView({ session, jid }: { session: SessionSummary; jid: st
                             <span className="text-ink-soft">🎤 </span>
                             {m.transcript}
                           </span>
-                        ) : (
+                        ) : m.media && m.kind !== 'voice' && m.kind !== 'audio' ? null : (
                           <span className="text-ink-soft">—</span>
                         )))
                       )}
@@ -556,3 +554,79 @@ const fold = (s: string) =>
     .toLowerCase()
     .normalize('NFD')
     .replace(/\p{Diacritic}/gu, '');
+
+const VISUAL: MessageKind[] = ['image', 'sticker', 'gif', 'video'];
+
+/** extensión legible a partir del nombre o del tipo MIME (JPG, PDF, MP4…) */
+function fileExt(m: ArchivedMessage): string {
+  const fromName = m.media?.fileName?.split('.').pop();
+  if (fromName && fromName.length <= 5) return fromName.toUpperCase();
+  const sub = (m.media?.mimetype ?? '').split('/')[1]?.split(';')[0] ?? '';
+  return (
+    ({ jpeg: 'JPG', 'svg+xml': 'SVG', quicktime: 'MOV' } as Record<string, string>)[sub] ??
+    sub.toUpperCase()
+  );
+}
+
+/**
+ * Archivo del mensaje con el mismo formato para todos los tipos: miniatura (fotos,
+ * stickers, videos) o ícono (documentos), nombre y tamaño. La miniatura se baja
+ * recién cuando la fila aparece en pantalla.
+ */
+function MediaChip({ sessionId, jid, m }: { sessionId: string; jid: string; m: ArchivedMessage }) {
+  const visual = VISUAL.includes(m.kind);
+  const [ref, setRef] = useState<HTMLSpanElement | null>(null);
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const canShow = visual && m.kind !== 'video' && Boolean(m.media?.downloaded);
+
+  useEffect(() => {
+    if (!ref || !canShow) return;
+    let alive = true;
+    let made: string | null = null;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        io.disconnect();
+        projectMediaBlob(sessionId, jid, m.id)
+          .then((u) => {
+            made = u;
+            if (alive) setUrl(u);
+            else URL.revokeObjectURL(u);
+          })
+          .catch(() => alive && setFailed(true));
+      },
+      { rootMargin: '200px' },
+    );
+    io.observe(ref);
+    return () => {
+      alive = false;
+      io.disconnect();
+      if (made) URL.revokeObjectURL(made);
+    };
+  }, [ref, canShow, sessionId, jid, m.id]);
+
+  const name = m.media?.fileName ?? `${KIND_ES[m.kind]} del ${fmtDateTime(m.timestamp)}`;
+  const size = m.media?.size ? fmtBytes(m.media.size) : null;
+  const status = !m.media?.downloaded ? (m.media?.error ? 'no se pudo bajar' : 'bajando…') : null;
+
+  return (
+    <span ref={setRef} className="mb-1 flex items-center gap-2">
+      <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-lg border border-line bg-canvas text-violeta">
+        {url && !failed ? (
+          <img src={url} alt="" className="size-full object-cover" loading="lazy" />
+        ) : visual ? (
+          <ImageIcon className="size-4" />
+        ) : (
+          <FileText className="size-4" />
+        )}
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate text-xs font-bold text-violeta">{name}</span>
+        <span className="block text-[11px] text-ink-soft">
+          {[fileExt(m), size, status].filter(Boolean).join(' · ')}
+        </span>
+      </span>
+    </span>
+  );
+}
