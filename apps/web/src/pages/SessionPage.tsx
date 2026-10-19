@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   ArrowLeft,
+  Bot,
   FolderKanban,
   LayoutDashboard,
   MessagesSquare,
@@ -20,8 +21,9 @@ import { Dashboard } from '../components/Dashboard';
 import { LinkView } from '../components/LinkView';
 import { MyView } from '../components/MyView';
 import { ProjectView } from '../components/ProjectView';
+import { AssistantOffer, AssistantSettingsDialog } from '../components/AssistantPanel';
 
-type Confirm = 'logout' | 'delete' | null;
+type Confirm = 'logout' | 'delete' | 'assistant' | null;
 
 export function SessionPage() {
   const { id } = useParams();
@@ -119,6 +121,15 @@ export function SessionPage() {
         </h1>
         <StatusBadge status={session.status} />
         <div className="ml-auto flex gap-2">
+          {session.assistant && (
+            <button
+              className="btn-secondary"
+              onClick={() => setConfirm('assistant')}
+              title="Ajustes del asistente"
+            >
+              <Bot className="size-4 text-violeta" /> Asistente
+            </button>
+          )}
           {['logged_out', 'qr_expired', 'error'].includes(session.status) && (
             <button className="btn-secondary" onClick={() => setConfirm('delete')} disabled={busy}>
               <Trash2 className="size-4" /> Eliminar
@@ -140,6 +151,12 @@ export function SessionPage() {
             busy={busy}
             onReconnect={() => void run(() => api.connect(id))}
           />
+          {!session.assistant && (
+            <AssistantOffer
+              session={session}
+              onEnable={async (req) => setSession(await api.setAssistant(id, req))}
+            />
+          )}
           {session.personal && <Tabs tab={tab} onChange={setTab} projects={projects} />}
           {tab.startsWith('p:') ? (
             <ProjectView key={tab} session={session} jid={tab.slice(2)} />
@@ -153,6 +170,14 @@ export function SessionPage() {
                   .then(setProjects)
                   .catch(() => {})
               }
+              onPin={async (jid) => {
+                const p = await api.isolate(id, jid);
+                setProjects((cur) => [...cur.filter((x) => x.jid !== p.jid), p]);
+              }}
+              onUnpin={async (jid) => {
+                await api.unisolate(id, jid);
+                setProjects((cur) => cur.filter((x) => x.jid !== jid));
+              }}
               onIsolate={async (jid) => {
                 const p = await api.isolate(id, jid);
                 setProjects((cur) => [...cur.filter((x) => x.jid !== p.jid), p]);
@@ -164,13 +189,48 @@ export function SessionPage() {
           )}
         </>
       ) : (
-        <LinkView
+        <>
+          {session.assistant?.awaitingLink ? (
+            <div className="mb-6 flex items-center gap-3 rounded-xl border border-violeta/20 bg-violeta/5 px-4 py-3 text-sm text-ink">
+              <Bot className="size-4 shrink-0 text-violeta" />
+              <span>
+                <b>Modo asistente activado.</b> Escanea el QR para traer tus últimos 90 días de
+                mensajes.
+              </span>
+            </div>
+          ) : (
+            !session.assistant && (
+              <AssistantOffer
+                session={session}
+                onEnable={async (req) => setSession(await api.setAssistant(id, req))}
+              />
+            )
+          )}
+          <LinkView
+            session={session}
+            busy={busy}
+            onNewQr={() => void run(() => api.connect(id))}
+            onSimulateScan={
+              simulator ? () => void run(async () => void (await api.simulateScan(id))) : undefined
+            }
+          />
+        </>
+      )}
+
+      {session.assistant && (
+        <AssistantSettingsDialog
+          key={`${session.assistant.send}${session.assistant.transcribe}${session.assistant.autoTranscribe}`}
+          open={confirm === 'assistant'}
+          onClose={() => setConfirm(null)}
           session={session}
-          busy={busy}
-          onNewQr={() => void run(() => api.connect(id))}
-          onSimulateScan={
-            simulator ? () => void run(async () => void (await api.simulateScan(id))) : undefined
-          }
+          onSave={async (req) => {
+            const s = await api.setAssistant(id, req);
+            setSession(s);
+            if (!req.enabled) {
+              setProjects([]);
+              setTab('general');
+            }
+          }}
         />
       )}
 

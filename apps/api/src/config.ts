@@ -55,8 +55,8 @@ const EnvSchema = z.object({
   WIPE_ON_LOGOUT: bool.default(true),
 
   /**
-   * Tu número (con o sin +, p.ej. 56912345678). Solo si el WhatsApp vinculado es este,
-   * se guardan (cifrados) los últimos mensajes de cada chat para "Mi vista".
+   * HEREDADO (ya no hace falta): el modo asistente se activa desde la web en cada sesión.
+   * Si está, la sesión de ese número pasa sola a modo asistente la primera vez.
    */
   OWNER_PHONE: z
     .string()
@@ -64,10 +64,7 @@ const EnvSchema = z.object({
     .pipe(z.string().regex(/^\d{8,15}$/, 'OWNER_PHONE debe ser un número con código de país'))
     .optional(),
 
-  /**
-   * Permite que el dueño envíe mensajes de texto desde su número (vía la API / Claude),
-   * con límites por minuto/hora/día. Solo aplica si también está OWNER_PHONE.
-   */
+  /** HEREDADO: valor inicial de "permitir envío" al adoptar OWNER_PHONE */
   ALLOW_SEND: bool.default(false),
 
   /**

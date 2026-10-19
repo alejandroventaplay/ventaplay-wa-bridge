@@ -92,14 +92,14 @@ export class BridgeClient {
     return body as T;
   }
 
-  /** la sesión del WhatsApp del dueño (la única con "Mi vista") */
+  /** la sesión en modo asistente (la única con "Mi vista") */
   async session(): Promise<SessionSummary> {
     const { sessions } = await this.req<{ sessions: SessionSummary[] }>('/sessions');
     const mine = sessions.filter((s) => s.personal);
     const pick = mine.find((s) => s.status === 'connected') ?? mine[0];
     if (!pick)
       throw new BridgeError(
-        'No hay un WhatsApp del dueño vinculado (OWNER_PHONE) en el Bridge. Vincúlalo con el QR en http://localhost:5190.',
+        'No hay un WhatsApp en modo asistente en el Bridge. Abre http://localhost:5190, vincula tu WhatsApp y toca "Activar asistente".',
       );
     this.sessionId = pick.id;
     return pick;
@@ -205,7 +205,7 @@ export function mimeFor(path: string): string {
   return MIME[ext] ?? 'application/octet-stream';
 }
 
-/** expande ~ y exige ruta absoluta (el conector corre en el Mac del dueño) */
+/** expande ~ y exige ruta absoluta (el conector corre en el equipo del usuario) */
 export function resolveLocalPath(path: string, home = process.env.HOME ?? ''): string {
   const p = path.trim().replace(/^~(?=\/|$)/, home);
   if (!p.startsWith('/'))

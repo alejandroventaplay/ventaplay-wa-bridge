@@ -21,6 +21,7 @@ import type { ArchivedMessage, MessageKind, ProjectInfo, SessionSummary } from '
 import { api, openFolderCommand, projectMediaBlob } from '../lib/api';
 import { fmtAgo, fmtBytes, fmtDateTime, fmtNumber, fmtPhone } from '../lib/format';
 import { Spinner } from './ui';
+import { ProjectMetrics } from './ProjectMetrics';
 
 const KIND_ES: Record<MessageKind, string> = {
   text: 'Texto',
@@ -148,7 +149,7 @@ export function ProjectView({ session, jid }: { session: SessionSummary; jid: st
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-xl font-black">{p.name}</h2>
             <p className="text-sm text-ink-soft">
-              Proyecto aislado {fmtAgo(p.since)} · se guarda todo lo que llega, sin tope
+              Siguiendo de cerca desde {fmtAgo(p.since)} · se guarda todo lo que llega, sin tope
             </p>
           </div>
         </div>
@@ -228,6 +229,8 @@ export function ProjectView({ session, jid }: { session: SessionSummary; jid: st
           </div>
         )}
       </section>
+
+      <ProjectMetrics sessionId={id} jid={jid} version={version} />
 
       <section className="card overflow-hidden">
         <div className="flex flex-wrap gap-2 border-b border-line p-3">

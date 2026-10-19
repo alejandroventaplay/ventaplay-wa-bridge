@@ -1,9 +1,11 @@
 import type {
+  AssistantRequest,
   HistoryFetchStatus,
   PersonalChatList,
   PersonalChatMessages,
   ProjectInfo,
   ProjectMessages,
+  ProjectMetrics,
   SendResult,
   SessionSummary,
   VoiceTranscript,
@@ -157,6 +159,19 @@ export const api = {
   /** proyectos: chats aislados con todo su dato */
   projects: (id: string) =>
     request<{ projects: ProjectInfo[] }>(`/sessions/${id}/projects`).then((r) => r.projects),
+  /** deja de seguir un chat: quita la pestaña y borra su archivo */
+  unisolate: (id: string, jid: string) =>
+    request<void>(`/sessions/${id}/projects/${encodeURIComponent(jid)}`, { method: 'DELETE' }),
+  projectMetrics: (id: string, jid: string, days?: number) =>
+    request<{ metrics: ProjectMetrics }>(
+      `/sessions/${id}/projects/${encodeURIComponent(jid)}/metrics${days ? `?days=${days}` : ''}`,
+    ).then((r) => r.metrics),
+  /** activa, ajusta o desactiva el modo asistente */
+  setAssistant: (id: string, body: AssistantRequest) =>
+    request<{ session: SessionSummary }>(`/sessions/${id}/assistant`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }).then((r) => r.session),
   isolate: (id: string, jid: string) =>
     request<{ project: ProjectInfo }>(`/sessions/${id}/projects`, {
       method: 'POST',

@@ -123,8 +123,39 @@ export interface SessionSummary {
    * mensajes hay guardados para "Mi vista". null para cualquier otro número.
    */
   personal: PersonalVaultInfo | null;
+  /** modo asistente de esta sesión; null = respaldo (solo estadísticas, sin contenido) */
+  assistant: AssistantSettings | null;
   /** siempre true: este servicio nunca envía mensajes */
   readOnly: true;
+}
+
+/**
+ * Modo asistente: la persona que vinculó su WhatsApp lo activa (con su consentimiento)
+ * y desde ahí se guardan sus mensajes cifrados en el equipo para leer, buscar,
+ * transcribir y (si lo permite) enviar. Solo una sesión asistente por instalación.
+ */
+export interface AssistantSettings {
+  enabled: boolean;
+  /** permite enviar mensajes desde su número (con confirmación y límites) */
+  send: boolean;
+  /** permite transcribir notas de voz (Whisper local) */
+  transcribe: boolean;
+  /** transcribe solas las notas de voz que lleguen */
+  autoTranscribe: boolean;
+  /** epoch ms en que se activó */
+  activatedAt: number | null;
+  /** se activó y falta escanear el QR nuevo para traer el historial */
+  awaitingLink: boolean;
+}
+
+/** lo que se puede pedir al activar o ajustar el asistente */
+export interface AssistantRequest {
+  enabled: boolean;
+  send?: boolean;
+  transcribe?: boolean;
+  autoTranscribe?: boolean;
+  /** al activar: desvincular y pedir QR nuevo para traer 90 días de historial (por defecto sí) */
+  relink?: boolean;
 }
 
 // ------------------------------------------------------------- Mi vista (solo el dueño)
@@ -315,6 +346,41 @@ export interface HistoryFetchStatus {
   /** por qué terminó: 'complete' (no hay más), 'limit' (tope de tramos), 'timeout' (el teléfono no respondió) */
   reason: 'complete' | 'limit' | 'timeout' | null;
   error: string | null;
+}
+
+/** Métricas por persona de un chat fijado (proyecto) */
+export interface ProjectMetrics {
+  jid: string;
+  /** ventana pedida en días; null = todo el archivo */
+  days: number | null;
+  from: number | null;
+  to: number | null;
+  total: number;
+  people: PersonMetrics[];
+  /** mensajes por día (YYYY-MM-DD, hora de Chile), del más antiguo al más nuevo */
+  byDay: { day: string; messages: number }[];
+  /** mensajes por hora del día (0-23, Chile) */
+  byHour: number[];
+}
+
+export interface PersonMetrics {
+  /** clave estable (jid, lid o "yo") */
+  key: string;
+  name: string;
+  phone: string | null;
+  fromMe: boolean;
+  messages: number;
+  /** % del total (0-1) */
+  share: number;
+  words: number;
+  media: number;
+  voiceNotes: number;
+  voiceSeconds: number;
+  first: number | null;
+  last: number | null;
+  /** veces que respondió a otro (dentro de 12 h) y mediana de cuánto tardó */
+  replies: number;
+  medianReplyMinutes: number | null;
 }
 
 export interface ProjectPerson {

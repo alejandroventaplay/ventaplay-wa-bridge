@@ -92,7 +92,7 @@ async function setup(
     5000,
     'historial completo',
   );
-  return { app, manager, store: t.store, id };
+  return { app, manager, store: t.store, id, sim };
 }
 
 describe('Mi vista', () => {
@@ -600,5 +600,103 @@ describe('Notas de voz a texto', () => {
       payload: {},
     });
     expect(r2.statusCode).toBe(409);
+  });
+});
+
+describe('Modo asistente (sin OWNER_PHONE)', () => {
+  async function scanAgain(ctx: Awaited<ReturnType<typeof setup>>): Promise<void> {
+    await waitFor(() => ctx.manager.get(ctx.id).status === 'qr', 3000, 'QR nuevo');
+    ctx.sim.scan(ctx.id);
+    await waitFor(
+      () => ctx.manager.get(ctx.id).summary().stats.state === 'complete',
+      5000,
+      'historial completo',
+    );
+  }
+
+  it('cualquiera lo activa: pide QR nuevo, guarda su historial y lo borra al desactivar', async () => {
+    const ctx = await setup(null, { transcriber: createFakeTranscriber() });
+    const { app, manager, store, id } = ctx;
+    // en respaldo: sin contenido
+    expect(manager.get(id).summary().assistant).toBeNull();
+    expect(
+      (await app.inject({ url: `/sessions/${id}/personal/chats`, headers: auth })).statusCode,
+    ).toBe(403);
+
+    const on = await app.inject({
+      method: 'POST',
+      url: `/sessions/${id}/assistant`,
+      headers: auth,
+      payload: { enabled: true, send: true },
+    });
+    expect(on.statusCode).toBe(200);
+    const s1 = (on.json() as { session: SessionSummary }).session;
+    expect(s1.assistant).toMatchObject({
+      enabled: true,
+      send: true,
+      transcribe: true,
+      awaitingLink: true,
+    });
+    expect(['qr', 'starting', 'connecting']).toContain(s1.status);
+
+    await scanAgain(ctx);
+    const sum = manager.get(id).summary();
+    expect(sum.assistant?.awaitingLink).toBe(false);
+    expect(sum.personal?.chats).toBeGreaterThan(0);
+    expect(sum.personal?.sendEnabled).toBe(true);
+    const list = await app.inject({ url: `/sessions/${id}/personal/chats`, headers: auth });
+    expect(list.statusCode).toBe(200);
+
+    // ajustar sin volver a vincular
+    const adj = await app.inject({
+      method: 'POST',
+      url: `/sessions/${id}/assistant`,
+      headers: auth,
+      payload: { enabled: true, send: false },
+    });
+    const s2 = (adj.json() as { session: SessionSummary }).session;
+    expect(s2.status).toBe('connected');
+    expect(s2.personal?.sendEnabled).toBe(false);
+
+    // desactivar: vuelve a respaldo y borra lo guardado
+    await manager.get(id).flush();
+    const off = await app.inject({
+      method: 'POST',
+      url: `/sessions/${id}/assistant`,
+      headers: auth,
+      payload: { enabled: false },
+    });
+    const s3 = (off.json() as { session: SessionSummary }).session;
+    expect(s3.assistant).toBeNull();
+    expect(s3.personal).toBeNull();
+    expect(await store.listAuthKeys(id, VAULT_KEY_PREFIX)).toHaveLength(0);
+    expect(
+      (await app.inject({ url: `/sessions/${id}/personal/chats`, headers: auth })).statusCode,
+    ).toBe(403);
+  });
+
+  it('solo una sesión asistente a la vez', async () => {
+    const ctx = await setup(null);
+    const { app, id } = ctx;
+    await app.inject({
+      method: 'POST',
+      url: `/sessions/${id}/assistant`,
+      headers: auth,
+      payload: { enabled: true, relink: false },
+    });
+    const created = await app.inject({
+      method: 'POST',
+      url: '/sessions',
+      headers: auth,
+      payload: {},
+    });
+    const other = (created.json() as { session: SessionSummary }).session.id;
+    const r = await app.inject({
+      method: 'POST',
+      url: `/sessions/${other}/assistant`,
+      headers: auth,
+      payload: { enabled: true },
+    });
+    expect(r.statusCode).toBe(409);
   });
 });

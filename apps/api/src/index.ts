@@ -66,22 +66,20 @@ async function main(): Promise<void> {
         proxyUrl: config.WA_PROXY_URL,
         browser: config.WA_BROWSER,
         version: config.WA_VERSION,
-        allowSend: config.ALLOW_SEND && Boolean(config.OWNER_PHONE),
-        allowMediaRetry: Boolean(config.OWNER_PHONE),
-        allowHistoryFetch: Boolean(config.OWNER_PHONE),
+        // las puertas (envío, re-subida de media, historial) las abre cada sesión
+        // asistente al crear su socket; el resto queda en solo lectura
       });
 
   // ---- notas de voz → texto (Whisper local; solo para el número dueño)
-  const transcriber =
-    config.TRANSCRIBE && config.OWNER_PHONE
-      ? simulator
-        ? createFakeTranscriber('Hola, esta es una nota de voz del simulador.')
-        : createWhisperTranscriber({
-            model: config.WHISPER_MODEL,
-            cacheDir: resolve(join(config.DATA_DIR, 'modelos')),
-            logger,
-          })
-      : null;
+  const transcriber = config.TRANSCRIBE
+    ? simulator
+      ? createFakeTranscriber('Hola, esta es una nota de voz del simulador.')
+      : createWhisperTranscriber({
+          model: config.WHISPER_MODEL,
+          cacheDir: resolve(join(config.DATA_DIR, 'modelos')),
+          logger,
+        })
+    : null;
 
   const manager = new SessionManager({
     store,
@@ -92,14 +90,14 @@ async function main(): Promise<void> {
     ownerPhone: config.OWNER_PHONE ?? null,
     allowSend: config.ALLOW_SEND && Boolean(config.OWNER_PHONE),
     downloadMedia: simulator ? simulator.downloadMedia : createMediaDownloader(logger),
-    exportDir: config.OWNER_PHONE
-      ? resolve(config.PROJECTS_DIR ?? join(config.DATA_DIR, 'proyectos'))
-      : null,
+    exportDir: resolve(config.PROJECTS_DIR ?? join(config.DATA_DIR, 'proyectos')),
     transcriber: transcriber,
     autoTranscribe: config.AUTO_TRANSCRIBE,
   });
   if (config.OWNER_PHONE)
-    logger.info('"Mi vista" activa para el número del dueño (mensajes cifrados en disco)');
+    logger.info(
+      'OWNER_PHONE heredado: esa sesión pasa sola a modo asistente (ahora se activa desde la web)',
+    );
 
   const auth = createAuthenticator(config);
   if (auth.mode === 'none') {

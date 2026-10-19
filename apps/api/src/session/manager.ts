@@ -6,6 +6,7 @@ import type { SessionRecord, SessionStore } from '../store/types.js';
 import type { MediaDownloader, SocketFactory } from '../wa/types.js';
 import { HttpError } from './errors.js';
 import type { Transcriber } from '../transcribe/transcriber.js';
+import type { AssistantRequest } from '@wa-bridge/shared';
 import { WaSession } from './wa-session.js';
 
 export interface ManagerEvents {
@@ -110,6 +111,43 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
     const session = this.get(id);
     if (session.status === 'connected') return session.summary();
     await session.start();
+    return session.summary();
+  }
+
+  /**
+   * Activa, ajusta o desactiva el modo asistente. Solo una sesión asistente a la vez.
+   * Al activar una sesión ya vinculada se desvincula y se pide un QR nuevo: WhatsApp
+   * solo entrega el historial (90 días) al vincular.
+   */
+  async setAssistant(id: string, req: AssistantRequest): Promise<SessionSummary> {
+    const session = this.get(id);
+    if (!req.enabled) {
+      await session.disableAssistant();
+      await session.saveNow();
+      return session.summary();
+    }
+    if (session.isAssistant) {
+      session.enableAssistant(req, false);
+      await session.saveNow();
+      return session.summary();
+    }
+    const other = [...this.sessions.values()].find((s) => s.id !== id && s.isAssistant);
+    if (other) {
+      const who = other.summary();
+      throw new HttpError(
+        409,
+        'assistant_taken',
+        `Ya hay un asistente activo (${who.profile?.name ?? who.label ?? who.profile?.phone ?? 'otra sesión'}). Desactívalo antes de activar este.`,
+      );
+    }
+    // vinculado: desvincular y QR nuevo para traer el historial (salvo relink:false)
+    // sin vincular: queda esperando el QR y lo pedimos de inmediato
+    const relink = req.relink !== false && session.linked;
+    const needsLink = relink || !session.linked;
+    if (relink) await session.logout();
+    session.enableAssistant(req, needsLink);
+    await session.saveNow();
+    if (needsLink && session.status !== 'qr') await session.start();
     return session.summary();
   }
 

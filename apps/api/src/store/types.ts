@@ -1,4 +1,4 @@
-import type { SessionStatus, SyncStats, WaProfile } from '@wa-bridge/shared';
+import type { AssistantSettings, SessionStatus, SyncStats, WaProfile } from '@wa-bridge/shared';
 import type { StatsSnapshot } from '../session/stats.js';
 
 /** Lo que persistimos de cada sesión (siempre cifrado en reposo). */
@@ -17,6 +17,8 @@ export interface SessionRecord {
   /** estado interno del agregador de estadísticas, para seguir contando tras un reinicio */
   statsState: StatsSnapshot | null;
   lastError: string | null;
+  /** modo asistente (ausente en registros antiguos = respaldo, salvo OWNER_PHONE heredado) */
+  assistant?: AssistantSettings | null;
 }
 
 /**

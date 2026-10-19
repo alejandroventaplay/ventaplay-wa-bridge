@@ -63,6 +63,7 @@ function summaryOf(s: StatsAggregator): SessionSummary {
     stats: s.summary(),
     lastError: null,
     personal: null,
+    assistant: null,
     readOnly: true,
   };
 }

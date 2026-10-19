@@ -51,7 +51,12 @@ export interface BaileysFactoryOptions {
 export function createBaileysFactory(opts: BaileysFactoryOptions = {}): SocketFactory {
   const agent = opts.proxyUrl ? new HttpsProxyAgent(opts.proxyUrl) : undefined;
 
-  return async ({ auth, logger }) => {
+  return async ({ auth, logger, capabilities }) => {
+    const caps = capabilities ?? {
+      send: Boolean(opts.allowSend),
+      mediaRetry: Boolean(opts.allowMediaRetry),
+      historyFetch: Boolean(opts.allowHistoryFetch),
+    };
     const version = opts.version === 'bundled' ? undefined : await resolveVersion(logger);
     const sock = makeWASocket({
       auth: {
@@ -76,9 +81,9 @@ export function createBaileysFactory(opts: BaileysFactoryOptions = {}): SocketFa
 
     // Única puerta de salida: guardamos el envío original ANTES del candado y solo
     // exponemos texto plano. La sesión decide quién y cuánto puede enviar.
-    const original = opts.allowSend ? sock.sendMessage : null;
-    const reupload = opts.allowMediaRetry ? sock.updateMediaMessage : null;
-    const history = opts.allowHistoryFetch ? sock.fetchMessageHistory : null;
+    const original = caps.send ? sock.sendMessage : null;
+    const reupload = caps.mediaRetry ? sock.updateMediaMessage : null;
+    const history = caps.historyFetch ? sock.fetchMessageHistory : null;
     const blocked = enforceReadOnly(sock);
     if (history) {
       (sock as unknown as WaSocketLike).fetchHistory = (count, oldest, ts) =>

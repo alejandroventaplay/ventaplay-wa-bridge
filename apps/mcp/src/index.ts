@@ -15,11 +15,11 @@ import {
 import { author, body, chatLine, chatTitle, phone, transcript, when } from './format.js';
 
 /**
- * Conector "WhatsApp de Alejandro": deja que Claude lea, busque y resuma el WhatsApp
- * del dueño a través del WA Bridge que corre en su Mac. Enviar exige confirmación.
+ * Conector del WA Bridge: deja que Claude lea, busque y resuma el WhatsApp de la
+ * persona que activó el modo asistente, a través del Bridge que corre en su equipo. Enviar exige confirmación.
  */
 const client = new BridgeClient(await loadConfig());
-const server = new McpServer({ name: 'whatsapp-alejandro', version: '0.3.0' });
+const server = new McpServer({ name: 'whatsapp-alejandro', version: '0.4.0' });
 
 type Text = { content: { type: 'text'; text: string }[]; isError?: boolean };
 const text = (t: string): Text => ({ content: [{ type: 'text', text: t }] });
@@ -56,7 +56,7 @@ server.registerTool(
   {
     title: 'Estado del WhatsApp',
     description:
-      'Estado de la conexión del WhatsApp de Alejandro en el WA Bridge: número, si está conectado, avance de la sincronización y cuántos chats y mensajes hay guardados. Úsala primero si algo falla.',
+      'Estado de la conexión del WhatsApp del usuario (modo asistente) en el WA Bridge: número, si está conectado, avance de la sincronización y cuántos chats y mensajes hay guardados. Úsala primero si algo falla.',
     inputSchema: {},
     annotations: READ,
   },
@@ -79,7 +79,7 @@ server.registerTool(
   {
     title: 'Listar chats',
     description:
-      'Lista los chats de WhatsApp de Alejandro con actividad reciente, del más reciente al más antiguo, con el último mensaje y si quedó sin responder. Sirve como "bandeja de entrada". Devuelve el jid de cada chat para usarlo en las otras herramientas.',
+      'Lista los chats de WhatsApp del usuario con actividad reciente, del más reciente al más antiguo, con el último mensaje y si quedó sin responder. Sirve como "bandeja de entrada". Devuelve el jid de cada chat para usarlo en las otras herramientas.',
     inputSchema: {
       dias: z.number().int().min(1).max(90).default(7).describe('ventana en días (máx. 90)'),
       tipo: z.enum(['todos', 'personas', 'grupos']).default('todos'),
@@ -146,7 +146,7 @@ server.registerTool(
   {
     title: 'Transcribir notas de voz',
     description:
-      'Pasa a texto las últimas notas de voz de un chat (Whisper corriendo en el Mac de Alejandro; el audio no sale del equipo). Devuelve fecha, quién habló y el texto. Las ya transcritas vienen guardadas. La primera vez baja el modelo (~500 MB) y puede tardar unos minutos.',
+      'Pasa a texto las últimas notas de voz de un chat (Whisper corriendo en el equipo del usuario; el audio no sale de ahí). Devuelve fecha, quién habló y el texto. Las ya transcritas vienen guardadas. La primera vez baja el modelo (~500 MB) y puede tardar unos minutos.',
     inputSchema: {
       chat: z.string().min(1).describe('nombre del contacto o grupo, número o jid'),
       cantidad: z
@@ -219,7 +219,7 @@ server.registerTool(
   {
     title: 'Pendientes por responder',
     description:
-      'Chats donde el último mensaje es de la otra persona (Alejandro no ha respondido), con lo que le escribieron desde su última respuesta. Ideal para "¿a quién le debo respuesta?".',
+      'Chats donde el último mensaje es de la otra persona (el usuario no ha respondido), con lo que le escribieron desde su última respuesta. Ideal para "¿a quién le debo respuesta?".',
     inputSchema: {
       dias: z.number().int().min(1).max(30).default(3),
       incluir_grupos: z.boolean().default(false),
@@ -254,14 +254,14 @@ server.registerTool(
   {
     title: 'Enviar un mensaje',
     description:
-      'Envía un mensaje de texto desde el WhatsApp de Alejandro a un chat que ya existe. OBLIGATORIO: antes de llamar con confirmado=true, muéstrale a Alejandro el destinatario y el texto EXACTO y espera su "sí" explícito en el chat. Con confirmado=false solo devuelve la vista previa. Nunca envíes en masa ni a varios chats sin una confirmación por cada uno. Hay límites (8/min, 40/hora, 150/día).',
+      'Envía un mensaje de texto desde el WhatsApp del usuario a un chat que ya existe. OBLIGATORIO: antes de llamar con confirmado=true, muéstrale al usuario el destinatario y el texto EXACTO y espera su "sí" explícito en el chat. Con confirmado=false solo devuelve la vista previa. Nunca envíes en masa ni a varios chats sin una confirmación por cada uno. Hay límites (8/min, 40/hora, 150/día).',
     inputSchema: {
       chat: z.string().min(1).describe('nombre, número o jid del chat'),
       texto: z.string().min(1).max(4096),
       confirmado: z
         .boolean()
         .default(false)
-        .describe('true solo después de que Alejandro aprobó este texto y destinatario'),
+        .describe('true solo después de que el usuario aprobó este texto y destinatario'),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
   },
@@ -269,7 +269,7 @@ server.registerTool(
     run(async () => {
       const c = await findChat(chat);
       if (!confirmado)
-        return `Vista previa (NO enviado):\nPara: ${chatTitle(c)}\nTexto:\n${texto}\n\nPide confirmación a Alejandro y vuelve a llamar con confirmado=true y jid ${c.jid}.`;
+        return `Vista previa (NO enviado):\nPara: ${chatTitle(c)}\nTexto:\n${texto}\n\nPide confirmación al usuario y vuelve a llamar con confirmado=true y jid ${c.jid}.`;
       const r = await client.send(c.jid, texto);
       return `✅ Enviado a ${chatTitle(r.chat)} a las ${when(r.message.timestamp)}.\nQuedan ${r.remaining.hour} envíos esta hora y ${r.remaining.day} hoy.`;
     }),
@@ -282,7 +282,7 @@ server.registerTool(
   {
     title: 'Enviar una foto o archivo',
     description:
-      'Envía una foto, video, audio o documento que está en el Mac de Alejandro (ruta absoluta o con ~) a un chat que ya existe, con un comentario opcional. Máx. 16 MB. JPG/PNG/MP4 van como foto/video; lo demás (PDF, Excel, HEIC, MOV…) como documento. OBLIGATORIO: antes de llamar con confirmado=true, muéstrale a Alejandro el destinatario, el archivo y el comentario y espera su "sí" explícito. Con confirmado=false solo devuelve la vista previa. Mismos límites que los textos.',
+      'Envía una foto, video, audio o documento que está en el equipo del usuario (ruta absoluta o con ~) a un chat que ya existe, con un comentario opcional. Máx. 16 MB. JPG/PNG/MP4 van como foto/video; lo demás (PDF, Excel, HEIC, MOV…) como documento. OBLIGATORIO: antes de llamar con confirmado=true, muéstrale al usuario el destinatario, el archivo y el comentario y espera su "sí" explícito. Con confirmado=false solo devuelve la vista previa. Mismos límites que los textos.',
     inputSchema: {
       chat: z.string().min(1).describe('nombre, número o jid del chat'),
       ruta: z
@@ -297,7 +297,7 @@ server.registerTool(
       confirmado: z
         .boolean()
         .default(false)
-        .describe('true solo después de que Alejandro aprobó archivo y destinatario'),
+        .describe('true solo después de que el usuario aprobó archivo y destinatario'),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
   },
@@ -315,7 +315,7 @@ server.registerTool(
       const mimetype = mimeFor(path);
       const size = `${(info.size / 1024).toFixed(0)} KB`;
       if (!confirmado)
-        return `Vista previa (NO enviado):\nPara: ${chatTitle(c)}\nArchivo: ${fileName} (${size}, ${mimetype}${como_documento ? ', como documento' : ''})\nComentario: ${comentario?.trim() || '(ninguno)'}\n\nPide confirmación a Alejandro y vuelve a llamar con confirmado=true y jid ${c.jid}.`;
+        return `Vista previa (NO enviado):\nPara: ${chatTitle(c)}\nArchivo: ${fileName} (${size}, ${mimetype}${como_documento ? ', como documento' : ''})\nComentario: ${comentario?.trim() || '(ninguno)'}\n\nPide confirmación al usuario y vuelve a llamar con confirmado=true y jid ${c.jid}.`;
       const data = await readFile(path);
       const r = await client.sendFile(
         c.jid,

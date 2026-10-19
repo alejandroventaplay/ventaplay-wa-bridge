@@ -45,6 +45,14 @@ const SearchQuery = z.object({
 });
 const SendBody = z.object({ text: z.string().min(1).max(4096) });
 const TranscriptBody = z.object({ force: z.boolean().optional() });
+const MetricsQuery = z.object({ days: z.coerce.number().int().min(1).max(3650).optional() });
+const AssistantBody = z.object({
+  enabled: z.boolean(),
+  send: z.boolean().optional(),
+  transcribe: z.boolean().optional(),
+  autoTranscribe: z.boolean().optional(),
+  relink: z.boolean().optional(),
+});
 /** archivo en base64 (16 MB → ~21,4 MB de texto) */
 const SendMediaBody = z.object({
   data: z.string().min(1),
@@ -113,8 +121,8 @@ export async function buildServer(deps: ServerDeps) {
     storage: deps.storageKind,
     auth: auth.mode,
     readOnly: true,
-    /** el dueño puede enviar texto desde su número (con límites); todo lo demás sigue bloqueado */
-    sendEnabled: config.ALLOW_SEND && Boolean(config.OWNER_PHONE),
+    /** el envío se habilita por sesión en el modo asistente (con límites) */
+    assistantMode: true,
   }));
 
   // ----------------------------------------------------------- protegidas
@@ -322,6 +330,14 @@ export async function buildServer(deps: ServerDeps) {
       return { history: manager.get(id).historyStatus(jid) };
     });
 
+    /** métricas por persona de un chat fijado (?days=30; sin days = todo) */
+    api.get('/sessions/:id/projects/:jid/metrics', async (req, reply) => {
+      const { id, jid } = ChatParams.parse(req.params);
+      const { days } = MetricsQuery.parse(req.query);
+      reply.header('cache-control', 'no-store');
+      return { metrics: await manager.get(id).projectMetrics(jid, { days: days ?? null }) };
+    });
+
     /** reescribe la carpeta del proyecto (JSONL, Excel y archivos) */
     api.post('/sessions/:id/projects/:jid/export', async (req) => {
       const { id, jid } = ChatParams.parse(req.params);
@@ -345,6 +361,17 @@ export async function buildServer(deps: ServerDeps) {
       const { force } = TranscriptBody.parse(req.body ?? {});
       const t = await manager.get(id).transcribeMessage(jid, msgId, { force });
       return { transcript: t };
+    });
+
+    /** activa / ajusta / desactiva el modo asistente de la sesión */
+    api.post('/sessions/:id/assistant', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      const body = AssistantBody.parse(req.body ?? {});
+      req.log.info(
+        { session: id, enabled: body.enabled, by: req.principal?.email ?? req.principal?.sub },
+        'cambio de modo asistente',
+      );
+      return { session: await manager.setAssistant(id, body) };
     });
 
     api.post('/sessions/:id/connect', async (req) => {

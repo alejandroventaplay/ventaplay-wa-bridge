@@ -15,6 +15,7 @@ import {
   MapPin,
   MessageCircle,
   Mic,
+  Pin,
   Search,
   Smile,
   Sparkles,
@@ -58,6 +59,8 @@ export function MyView({
   projects = [],
   onIsolate,
   onProjectsChanged,
+  onPin,
+  onUnpin,
 }: {
   session: SessionSummary;
   /** chats aislados como proyecto */
@@ -66,6 +69,10 @@ export function MyView({
   onIsolate?: (jid: string) => Promise<void>;
   /** algo creó o cambió un proyecto por fuera (p. ej. traer toda la conversación) */
   onProjectsChanged?: () => void;
+  /** fija el chat ("seguir de cerca"): queda como pestaña, sin cambiar de vista */
+  onPin?: (jid: string) => Promise<void>;
+  /** deja de seguirlo: quita la pestaña y borra su archivo */
+  onUnpin?: (jid: string) => Promise<void>;
 }) {
   const id = session.id;
   const [list, setList] = useState<PersonalChatList | null>(null);
@@ -97,15 +104,18 @@ export function MyView({
 
   const items = useMemo(() => {
     const q = normalize(query.trim());
-    return (list?.items ?? []).filter(
-      (c) =>
-        (filter === 'groups' ? c.isGroup : !c.isGroup) &&
-        (!q ||
-          normalize(c.name).includes(q) ||
-          (c.phone ?? '').includes(q.replace(/\D/g, '') || '§') ||
-          normalize(c.preview ?? '').includes(q)),
-    );
-  }, [list, filter, query]);
+    const pinned = new Set(projects);
+    return (list?.items ?? [])
+      .filter(
+        (c) =>
+          (filter === 'groups' ? c.isGroup : !c.isGroup) &&
+          (!q ||
+            normalize(c.name).includes(q) ||
+            (c.phone ?? '').includes(q.replace(/\D/g, '') || '§') ||
+            normalize(c.preview ?? '').includes(q)),
+      )
+      .sort((a, b) => Number(pinned.has(b.jid)) - Number(pinned.has(a.jid)));
+  }, [list, filter, query, projects]);
 
   const current = list?.items.find((c) => c.jid === selected) ?? null;
 
@@ -167,6 +177,9 @@ export function MyView({
                     now={now}
                     active={c.jid === selected}
                     onClick={() => setSelected(c.jid)}
+                    pinned={projects.includes(c.jid)}
+                    onPin={onPin}
+                    onUnpin={onUnpin}
                   />
                 </li>
               ))}
@@ -255,35 +268,86 @@ function ChatRow({
   now,
   active,
   onClick,
+  pinned,
+  onPin,
+  onUnpin,
 }: {
   chat: PersonalChat;
   now: number;
   active: boolean;
   onClick: () => void;
+  pinned: boolean;
+  onPin?: (jid: string) => Promise<void>;
+  onUnpin?: (jid: string) => Promise<void>;
 }) {
   const who = chat.previewFromMe ? 'Tú' : chat.isGroup ? chat.previewSender : null;
+  const [busy, setBusy] = useState(false);
+  const canPin = pinned ? Boolean(onUnpin) : Boolean(onPin);
+  async function toggle() {
+    if (pinned) {
+      if (
+        !window.confirm(
+          `¿Dejar de seguir "${chat.name}"? Se quita su pestaña y se borra su archivo completo (el chat sigue en Mi vista).`,
+        )
+      )
+        return;
+      setBusy(true);
+      await onUnpin?.(chat.jid).finally(() => setBusy(false));
+    } else {
+      setBusy(true);
+      await onPin?.(chat.jid).finally(() => setBusy(false));
+    }
+  }
   return (
-    <button
-      onClick={onClick}
-      className={`flex w-full items-center gap-3 border-b border-line/60 px-4 py-3 text-left transition ${
-        active ? 'bg-violeta-5' : 'hover:bg-canvas'
-      }`}
-    >
-      <ChatAvatar chat={chat} />
-      <span className="min-w-0 flex-1">
-        <span className="flex items-baseline gap-2">
-          <span className="min-w-0 flex-1 truncate font-bold">{chat.name}</span>
-          <span className="shrink-0 text-xs text-ink-soft tabular-nums">
-            {fmtChatStamp(chat.lastMessageAt, now)}
+    <div className="group relative">
+      <button
+        onClick={onClick}
+        className={`flex w-full items-center gap-3 border-b border-line/60 py-3 pr-11 pl-4 text-left transition ${
+          active ? 'bg-violeta-5' : 'hover:bg-canvas'
+        }`}
+      >
+        <ChatAvatar chat={chat} />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-baseline gap-2">
+            <span className="min-w-0 flex-1 truncate font-bold">{chat.name}</span>
+            <span className="shrink-0 text-xs text-ink-soft tabular-nums">
+              {fmtChatStamp(chat.lastMessageAt, now)}
+            </span>
+          </span>
+          <span className="mt-0.5 flex items-center gap-1 text-sm text-ink-soft">
+            {who && <span className="shrink-0 font-semibold">{who}:</span>}
+            <KindIcon kind={chat.previewKind} className="size-3.5 shrink-0" />
+            <span className="truncate">{previewText(chat.previewKind, chat.preview)}</span>
           </span>
         </span>
-        <span className="mt-0.5 flex items-center gap-1 text-sm text-ink-soft">
-          {who && <span className="shrink-0 font-semibold">{who}:</span>}
-          <KindIcon kind={chat.previewKind} className="size-3.5 shrink-0" />
-          <span className="truncate">{previewText(chat.previewKind, chat.preview)}</span>
-        </span>
-      </span>
-    </button>
+      </button>
+      {canPin && (
+        <button
+          type="button"
+          onClick={() => void toggle()}
+          disabled={busy}
+          aria-label={pinned ? 'Dejar de seguir' : 'Seguir de cerca'}
+          title={
+            pinned
+              ? 'Siguiendo de cerca (tiene su pestaña). Clic para dejar de seguir.'
+              : 'Seguir de cerca: guarda todo el chat, sus archivos y métricas en su propia pestaña'
+          }
+          className={`absolute top-1/2 right-2 grid size-8 -translate-y-1/2 place-items-center rounded-full transition ${
+            pinned
+              ? 'text-violeta hover:bg-violeta/10'
+              : 'text-ink-soft opacity-0 group-hover:opacity-100 hover:bg-violeta/10 hover:text-violeta focus-visible:opacity-100'
+          }`}
+        >
+          {busy ? (
+            <Spinner className="size-4" />
+          ) : pinned ? (
+            <Pin className="size-4 fill-current" />
+          ) : (
+            <Pin className="size-4" />
+          )}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -502,8 +566,8 @@ function ChatPanel({
             disabled={isolating}
             title={
               isolated
-                ? 'Este chat ya se guarda completo: abre su pestaña'
-                : 'Guardar TODO este chat (sin tope) con sus metadatos y archivos, en su propia pestaña'
+                ? 'Este chat ya se sigue de cerca: abre su pestaña'
+                : 'Seguir de cerca: guarda TODO este chat (sin tope), sus archivos y métricas en su propia pestaña'
             }
             onClick={() => {
               setIsolating(true);
@@ -512,10 +576,14 @@ function ChatPanel({
                 .finally(() => setIsolating(false));
             }}
           >
-            {isolating ? <Spinner className="size-4" /> : <FolderKanban className="size-4" />}
-            <span className="hidden sm:inline">
-              {isolated ? 'Ver proyecto' : 'Aislar como proyecto'}
-            </span>
+            {isolating ? (
+              <Spinner className="size-4" />
+            ) : isolated ? (
+              <FolderKanban className="size-4" />
+            ) : (
+              <Pin className="size-4" />
+            )}
+            <span className="hidden sm:inline">{isolated ? 'Ver pestaña' : 'Seguir de cerca'}</span>
           </button>
         )}
       </header>

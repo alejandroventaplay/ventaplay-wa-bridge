@@ -23,8 +23,12 @@ import type {
   ProjectInfo,
   ProjectMessages,
   HistoryFetchStatus,
+  AssistantRequest,
+  AssistantSettings,
+  ProjectMetrics,
 } from '@wa-bridge/shared';
 import { projectSlug, writeProjectExport } from '../export/project-export.js';
+import { computeProjectMetrics } from './project-metrics.js';
 import type { SessionRecord, SessionStore } from '../store/types.js';
 import { loadAuthState, type StoredAuthState } from '../wa/auth-state.js';
 import {
@@ -185,6 +189,11 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     this.stats = new StatsAggregator(record.statsState);
   }
 
+  /** hay un teléfono vinculado (credenciales guardadas) */
+  get linked(): boolean {
+    return this.record.linked;
+  }
+
   get status(): SessionStatus {
     return this.record.status;
   }
@@ -249,6 +258,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       stats: this.stats.summary(),
       lastError: this.record.lastError,
       personal: this.personalInfo(),
+      assistant: this.assistantSettings(),
       readOnly: true,
     };
   }
@@ -260,12 +270,96 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
    * (justo después de escanear): ahí guardamos en memoria pero no en disco.
    */
   private ownerState(): 'yes' | 'no' | 'unknown' {
+    const a = this.record.assistant;
+    if (a) return a.enabled ? 'yes' : 'no';
+    // heredado: OWNER_PHONE en el .env (instalaciones anteriores al modo asistente)
     const owner = this.deps.ownerPhone?.replace(/\D/g, '');
     if (!owner) return 'no';
     const me = this.auth?.state.creds.me?.id ?? this.record.profile?.jid ?? null;
     if (!me) return 'unknown';
     const phone = (me.split('@')[0] ?? '').split(':')[0] ?? '';
-    return phone === owner ? 'yes' : 'no';
+    if (phone !== owner) return 'no';
+    this.adoptLegacyOwner();
+    return 'yes';
+  }
+
+  /** OWNER_PHONE del .env coincide: lo pasamos a modo asistente guardado en la sesión */
+  private adoptLegacyOwner(): void {
+    if (this.record.assistant) return;
+    this.record.assistant = {
+      enabled: true,
+      send: Boolean(this.deps.allowSend),
+      transcribe: Boolean(this.deps.transcriber),
+      autoTranscribe: Boolean(this.deps.autoTranscribe),
+      activatedAt: Date.now(),
+      awaitingLink: false,
+    };
+    this.log.info('OWNER_PHONE heredado: la sesión queda en modo asistente');
+    this.touch();
+  }
+
+  // ------------------------------------------------------------ modo asistente
+
+  /** ajustes del asistente; null = respaldo */
+  assistantSettings(): AssistantSettings | null {
+    if (this.ownerState() === 'yes') return { ...this.record.assistant! };
+    return null;
+  }
+
+  /** ¿esta sesión es (o va a ser, al escanear) la asistente? */
+  get isAssistant(): boolean {
+    return this.ownerState() === 'yes';
+  }
+
+  /** activa el modo asistente (el historial llega al escanear un QR nuevo) */
+  enableAssistant(opts: Omit<AssistantRequest, 'enabled'>, awaitingLink: boolean): void {
+    const prev = this.record.assistant?.enabled ? this.record.assistant : null;
+    this.record.assistant = {
+      enabled: true,
+      send: opts.send ?? prev?.send ?? false,
+      transcribe: opts.transcribe ?? prev?.transcribe ?? true,
+      autoTranscribe: opts.autoTranscribe ?? prev?.autoTranscribe ?? true,
+      activatedAt: prev?.activatedAt ?? Date.now(),
+      awaitingLink: prev ? prev.awaitingLink : awaitingLink,
+    };
+    this.vaultLoaded = false;
+    this.touch(true);
+  }
+
+  /** vuelve a respaldo: borra mensajes, transcripciones y proyectos guardados */
+  async disableAssistant(): Promise<void> {
+    const prev = this.record.assistant;
+    this.record.assistant = {
+      enabled: false,
+      send: false,
+      transcribe: prev?.transcribe ?? true,
+      autoTranscribe: prev?.autoTranscribe ?? true,
+      activatedAt: null,
+      awaitingLink: false,
+    };
+    this.stopBackfills();
+    this.resetVault();
+    this.mediaCache.clear();
+    this.mediaCacheBytes = 0;
+    const keys = (
+      await Promise.all(
+        [VAULT_KEY_PREFIX, ARCHIVE_PREFIX, TRANSCRIPT_PREFIX].map((p) =>
+          this.deps.store.listAuthKeys(this.id, p),
+        ),
+      )
+    ).flat();
+    if (keys.length)
+      await this.deps.store.writeAuth(this.id, Object.fromEntries(keys.map((k) => [k, null])));
+    this.log.info(
+      { borradas: keys.length },
+      'modo asistente desactivado: datos personales borrados',
+    );
+    this.touch(true);
+  }
+
+  /** guarda ya el registro (tras cambiar el modo asistente) */
+  async saveNow(): Promise<void> {
+    await this.persist();
   }
 
   private personalInfo(): PersonalVaultInfo | null {
@@ -279,14 +373,30 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       perChat: VIEW_PER_CHAT,
       storeDays: VAULT_WINDOW_DAYS,
       storePerChat: VAULT_PER_CHAT,
-      sendEnabled: Boolean(this.deps.allowSend),
-      transcribeEnabled: Boolean(this.deps.transcriber),
+      sendEnabled: this.canSend(),
+      transcribeEnabled: this.canTranscribe(),
     };
+  }
+
+  private canSend(): boolean {
+    return this.ownerState() === 'yes' && Boolean(this.record.assistant?.send);
+  }
+
+  private canTranscribe(): boolean {
+    return (
+      this.ownerState() === 'yes' &&
+      Boolean(this.deps.transcriber) &&
+      this.record.assistant?.transcribe !== false
+    );
   }
 
   private requireOwner(): void {
     if (this.ownerState() !== 'yes')
-      throw new HttpError(403, 'not_owner', '"Mi vista" solo está disponible para tu número');
+      throw new HttpError(
+        403,
+        'not_owner',
+        '"Mi vista" solo está disponible con el modo asistente activado',
+      );
   }
 
   /** guarda en la bóveda lo que llegue, si corresponde */
@@ -309,8 +419,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
 
   /** notas de voz que llegan en vivo: se transcriben solas, de a una */
   private autoTranscribe(messages: Parameters<MessageVault['add']>[0]): void {
-    if (!this.deps.transcriber || !this.deps.autoTranscribe) return;
-    if (this.ownerState() !== 'yes') return;
+    if (!this.canTranscribe() || !this.record.assistant?.autoTranscribe) return;
     for (const m of messages) {
       const jid = m?.key?.remoteJid;
       const id = m?.key?.id;
@@ -351,7 +460,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     opts: { force?: boolean } = {},
   ): Promise<TranscriptResult> {
     this.requireOwner();
-    const transcriber = this.deps.transcriber;
+    const transcriber = this.canTranscribe() ? this.deps.transcriber : null;
     if (!transcriber)
       throw new HttpError(409, 'transcribe_disabled', 'La transcripción de audios está apagada');
     const existing = this.transcripts.get(messageId);
@@ -473,7 +582,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   private async loadVault(): Promise<void> {
     if (this.vaultLoaded) return;
     this.vaultLoaded = true;
-    if (!this.deps.ownerPhone) return;
+    if (!this.deps.ownerPhone && !this.record.assistant?.enabled) return;
     try {
       const keys = await this.deps.store.listAuthKeys(this.id, VAULT_KEY_PREFIX);
       if (!keys.length) return;
@@ -651,6 +760,18 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       messages: page.map((r) => this.toArchived(r, names, Boolean(opts.raw))),
       hasMore: upTo.length > page.length,
     };
+  }
+
+  /** métricas por persona de un chat fijado */
+  async projectMetrics(
+    chatJid: string,
+    opts: { days?: number | null } = {},
+  ): Promise<ProjectMetrics> {
+    this.requireOwner();
+    const jid = this.projectJid(chatJid);
+    const names = await this.names();
+    const msgs = this.archive.messages(jid).map((r) => this.toArchived(r, names, false));
+    return computeProjectMetrics(jid, msgs, { days: opts.days ?? null });
   }
 
   /** archivo bajado de un mensaje del proyecto */
@@ -1050,8 +1171,8 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       perChat: VIEW_PER_CHAT,
       storeDays: VAULT_WINDOW_DAYS,
       storePerChat: VAULT_PER_CHAT,
-      sendEnabled: Boolean(this.deps.allowSend),
-      transcribeEnabled: Boolean(this.deps.transcriber),
+      sendEnabled: this.canSend(),
+      transcribeEnabled: this.canTranscribe(),
     };
   }
 
@@ -1203,8 +1324,12 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   /** reglas comunes de envío: dueño, ALLOW_SEND, chat existente, conectado y frenos */
   private prepareSend(chatJid: string, now: number): { key: string; sock: WaSocketLike } {
     this.requireOwner();
-    if (!this.deps.allowSend)
-      throw new HttpError(403, 'send_disabled', 'El envío no está habilitado (ALLOW_SEND)');
+    if (!this.canSend())
+      throw new HttpError(
+        403,
+        'send_disabled',
+        'El envío no está habilitado (actívalo en los ajustes del asistente)',
+      );
     const key = this.stats.canonicalJid(chatJid);
     const v = this.mergedVault().get(key);
     if (!v?.messages.length)
@@ -1463,10 +1588,12 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       await this.credsChain.catch(() => {});
       if (gen !== this.generation || this.stopped) return;
       this.auth = await loadAuthState(this.deps.store, this.id);
+      const open = this.ownerState() !== 'no';
       const sock = await this.deps.socketFactory({
         sessionId: this.id,
         auth: this.auth,
         logger: this.log,
+        capabilities: { send: open, mediaRetry: open, historyFetch: open },
       });
       if (gen !== this.generation || this.stopped) {
         sock.end(undefined);
@@ -1621,6 +1748,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       this.qr = null;
       this.record.linked = true;
       this.record.connectedAt = Date.now();
+      if (this.record.assistant?.awaitingLink) this.record.assistant.awaitingLink = false;
       this.setStatus('connected', { lastError: null });
       void this.loadProfile(sock, this.generation);
       this.armIdleTimer();

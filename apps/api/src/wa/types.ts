@@ -67,6 +67,17 @@ export interface SocketFactoryOptions {
   sessionId: string;
   auth: StoredAuthState;
   logger: Logger;
+  /**
+   * Qué puertas abre el socket antes del candado de solo lectura. Solo la sesión en
+   * modo asistente las pide; si no viene, se usan los valores de la fábrica.
+   */
+  capabilities?: SocketCapabilities;
+}
+
+export interface SocketCapabilities {
+  send: boolean;
+  mediaRetry: boolean;
+  historyFetch: boolean;
 }
 
 export type SocketFactory = (opts: SocketFactoryOptions) => Promise<WaSocketLike>;
