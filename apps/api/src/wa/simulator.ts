@@ -135,7 +135,12 @@ class SimSocket implements WaSocketLike {
   async createGroup(subject: string, participants: string[]): Promise<CreatedGroup> {
     if (!this.user) throw new Error('no conectado');
     const id = `1203630${Date.now().toString().slice(-11)}@g.us`;
-    return { id, subject, participants: [this.user.id, ...participants] };
+    // como WhatsApp real: los participantes vuelven como LIDs
+    return {
+      id,
+      subject,
+      participants: [this.user.id, ...participants.map((_, i) => `9${i}0000000000@lid`)],
+    };
   }
 
   async sendText(jid: string, text: string): Promise<unknown> {

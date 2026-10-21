@@ -101,7 +101,9 @@ export function createBaileysFactory(opts: BaileysFactoryOptions = {}): SocketFa
       // solo crear: actualizar, salir o agregar gente a grupos existentes sigue bloqueado
       (sock as unknown as WaSocketLike).createGroup = async (subject, participants) => {
         const md = await groupCreate(subject, participants);
-        return { id: md.id, subject: md.subject, participants: md.participants.map((p) => p.id) };
+        // en grupos nuevos WhatsApp suele devolver LIDs: preferimos el número si viene
+        const members = md.participants.map((p) => p.phoneNumber ?? p.id);
+        return { id: md.id, subject: md.subject, participants: members };
       };
     }
     logger.debug({ blocked: blocked.length }, 'candado de solo lectura aplicado');

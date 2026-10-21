@@ -1381,10 +1381,17 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       throw new HttpError(502, 'send_failed', `WhatsApp no creó el grupo: ${errorMessage(err)}`);
     }
     this.log.info({ group: created.id, participants: jids.length }, 'grupo creado por el dueño');
-    const inGroup = new Set(created.participants.map((p) => p.split(':')[0]!.split('@')[0]));
-    const missing = jids
-      .filter((j) => !inGroup.has(j.split('@')[0]!))
-      .map((j) => `+${j.split('@')[0]}`);
+    // WhatsApp puede devolver LIDs en vez de números: si no podemos comparar por número,
+    // confiamos en el conteo (dueño + pedidos) para no dar falsos "no agregados"
+    const inGroup = new Set(
+      created.participants
+        .filter((p) => !p.endsWith('@lid'))
+        .map((p) => p.split(':')[0]!.split('@')[0]),
+    );
+    const allThere = created.participants.length >= jids.length + 1;
+    const missing = allThere
+      ? []
+      : jids.filter((j) => !inGroup.has(j.split('@')[0]!)).map((j) => `+${j.split('@')[0]}`);
     let message: GroupCreateResult['message'] = null;
     if (text && sock.sendText) {
       const sent = await this.deliver(created.id, () => sock.sendText!(created.id, text));
