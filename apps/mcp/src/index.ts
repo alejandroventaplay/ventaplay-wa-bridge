@@ -275,6 +275,56 @@ server.registerTool(
     }),
 );
 
+server.registerTool(
+  'whatsapp_crear_grupo',
+  {
+    title: 'Crear un grupo',
+    description:
+      'Crea un grupo nuevo de WhatsApp desde el número del usuario (queda de admin) con los participantes indicados (nombres de chats existentes o números, máx. 50) y un primer mensaje opcional. OBLIGATORIO: antes de llamar con confirmado=true, muéstrale al usuario el nombre del grupo, la lista EXACTA de participantes con su número y el mensaje, y espera su "sí" explícito. Con confirmado=false solo devuelve la vista previa. Máx. 10 grupos por día.',
+    inputSchema: {
+      nombre: z.string().min(1).max(100).describe('nombre (asunto) del grupo'),
+      participantes: z
+        .array(z.string().min(1))
+        .min(1)
+        .max(50)
+        .describe('nombres de chats existentes o números (+56 9…)'),
+      mensaje: z.string().max(4096).optional().describe('primer mensaje para el grupo'),
+      confirmado: z
+        .boolean()
+        .default(false)
+        .describe('true solo después de que el usuario aprobó nombre, participantes y mensaje'),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+  },
+  ({ nombre, participantes, mensaje, confirmado }) =>
+    run(async () => {
+      const people: { label: string; phone: string }[] = [];
+      for (const p of participantes) {
+        const digits = p.replace(/\D/g, '');
+        if (digits.length >= 8 && !/[a-záéíóúñ]/i.test(p)) {
+          people.push({ label: p, phone: digits });
+          continue;
+        }
+        const c = await findChat(p);
+        if (c.isGroup || !c.phone)
+          throw new BridgeError(`"${p}" no es un contacto con número (es ${chatTitle(c)}).`);
+        people.push({ label: chatTitle(c), phone: c.phone.replace(/\D/g, '') });
+      }
+      const list = people.map((x) => `- ${x.label} (${phone(x.phone)})`).join('\n');
+      if (!confirmado)
+        return `Vista previa (NO creado):\nGrupo: ${nombre}\nParticipantes (${people.length}):\n${list}${mensaje ? `\nPrimer mensaje:\n${mensaje}` : ''}\n\nPide confirmación al usuario y vuelve a llamar con confirmado=true.`;
+      const r = await client.createGroup(
+        nombre,
+        people.map((x) => x.phone),
+        mensaje ?? null,
+      );
+      const miss = r.notAdded.length
+        ? `\n⚠️ WhatsApp no dejó agregar a: ${r.notAdded.join(', ')} (hay que mandarles el link de invitación desde el teléfono).`
+        : '';
+      return `✅ Grupo "${r.group.name}" creado con ${r.participants} participantes (jid ${r.group.jid}).${r.message ? ' Primer mensaje enviado.' : ''}${miss}`;
+    }),
+);
+
 const MAX_FILE = 16 * 1024 * 1024;
 
 server.registerTool(

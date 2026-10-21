@@ -11,6 +11,7 @@ import type {
   SearchHit,
   SearchResult,
   SendResult,
+  GroupCreateResult,
   PersonalChat,
   PersonalChatList,
   PersonalChatMessages,
@@ -32,6 +33,7 @@ import { computeProjectMetrics } from './project-metrics.js';
 import type { SessionRecord, SessionStore } from '../store/types.js';
 import { loadAuthState, type StoredAuthState } from '../wa/auth-state.js';
 import {
+  type CreatedGroup,
   type HistoryAnchor,
   type MediaDownloader,
   type OutgoingMedia,
@@ -145,6 +147,8 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   private mediaCache = new Map<string, { buffer: Buffer; mimetype: string; thumbnail: boolean }>();
   private mediaCacheBytes = 0;
   private sendLimiter = new SendLimiter();
+  /** grupos creados en las últimas 24 h (freno aparte de los mensajes) */
+  private groupsCreated: number[] = [];
   /** chats aislados ("proyectos"): todo lo que llega, sin tope, con metadatos y media */
   private archive = new ChatArchive((v) => JSON.stringify(v, BufferJSON.replacer));
   private mediaRunning = false;
@@ -1321,6 +1325,79 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     return this.storeSent(key, sent, null, now);
   }
 
+  /**
+   * Crea un grupo nuevo desde el número del dueño (ALLOW_SEND), con él como admin.
+   * Máximo 50 participantes y 10 grupos por día. Opcionalmente manda un primer
+   * mensaje. El log guarda cuántos participantes, nunca los números ni el texto.
+   */
+  async createPersonalGroup(
+    input: { subject: string; participants: string[]; text?: string | null },
+    now = Date.now(),
+  ): Promise<GroupCreateResult> {
+    this.requireOwner();
+    if (!this.canSend())
+      throw new HttpError(
+        403,
+        'send_disabled',
+        'El envío no está habilitado (actívalo en los ajustes del asistente)',
+      );
+    const subject = input.subject.trim();
+    if (!subject) throw new HttpError(400, 'bad_request', 'El grupo necesita un nombre');
+    if (subject.length > 100)
+      throw new HttpError(400, 'bad_request', 'El nombre del grupo es muy largo (máx. 100)');
+    const me = this.auth?.state.creds.me?.id ?? this.record.profile?.jid ?? '';
+    const owner = (me.split('@')[0] ?? '').split(':')[0] ?? '';
+    const jids: string[] = [];
+    const invalid: string[] = [];
+    for (const raw of input.participants) {
+      const phone = toPhoneDigits(raw);
+      if (!phone) invalid.push(raw);
+      else if (phone !== owner && !jids.includes(`${phone}@s.whatsapp.net`))
+        jids.push(`${phone}@s.whatsapp.net`);
+    }
+    if (invalid.length)
+      throw new HttpError(400, 'bad_request', `Números no válidos: ${invalid.join(', ')}`);
+    if (!jids.length) throw new HttpError(400, 'bad_request', 'Agrega al menos un participante');
+    if (jids.length > 50)
+      throw new HttpError(400, 'bad_request', 'Máximo 50 participantes por grupo');
+    const text = input.text?.trim() || null;
+    if (text && text.length > 4096)
+      throw new HttpError(400, 'bad_request', 'El mensaje es muy largo (máx. 4096)');
+    const sock = this.sock;
+    if (!sock || this.record.status !== 'connected' || !sock.createGroup)
+      throw new HttpError(409, 'not_connected', 'WhatsApp no está conectado ahora');
+    this.groupsCreated = this.groupsCreated.filter((t) => t > now - 86_400_000);
+    if (this.groupsCreated.length >= 10)
+      throw new HttpError(429, 'rate_limited', 'Límite de 10 grupos nuevos por día alcanzado');
+    const wait = this.sendLimiter.check('group:create', now);
+    if (wait) throw new HttpError(429, 'rate_limited', wait);
+    this.sendLimiter.record('group:create', now);
+    this.groupsCreated.push(now);
+    let created: CreatedGroup;
+    try {
+      created = await withTimeout(sock.createGroup(subject, jids), 30_000);
+    } catch (err) {
+      this.log.warn({ err: errorMessage(err) }, 'no se pudo crear el grupo');
+      throw new HttpError(502, 'send_failed', `WhatsApp no creó el grupo: ${errorMessage(err)}`);
+    }
+    this.log.info({ group: created.id, participants: jids.length }, 'grupo creado por el dueño');
+    const inGroup = new Set(created.participants.map((p) => p.split(':')[0]!.split('@')[0]));
+    const missing = jids
+      .filter((j) => !inGroup.has(j.split('@')[0]!))
+      .map((j) => `+${j.split('@')[0]}`);
+    let message: GroupCreateResult['message'] = null;
+    if (text && sock.sendText) {
+      const sent = await this.deliver(created.id, () => sock.sendText!(created.id, text));
+      message = (await this.storeSent(created.id, sent, { conversation: text }, now)).message;
+    }
+    return {
+      group: { jid: created.id, name: created.subject || subject },
+      participants: jids.length,
+      notAdded: missing,
+      message,
+    };
+  }
+
   /** reglas comunes de envío: dueño, ALLOW_SEND, chat existente, conectado y frenos */
   private prepareSend(chatJid: string, now: number): { key: string; sock: WaSocketLike } {
     this.requireOwner();
@@ -2064,3 +2141,11 @@ const fold = (s: string) =>
     .toLowerCase()
     .normalize('NFD')
     .replace(/\p{Diacritic}/gu, '');
+
+/** número en formato internacional sin "+": acepta +56 9…, 9… (Chile) o 8–15 dígitos */
+export function toPhoneDigits(raw: string): string | null {
+  const d = raw.replace(/\D/g, '');
+  if (/^9\d{8}$/.test(d)) return `56${d}`;
+  if (/^\d{8,15}$/.test(d)) return d;
+  return null;
+}

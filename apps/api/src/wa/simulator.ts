@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { BaileysEventMap, WABusinessProfile } from 'baileys';
 import type { HistoryBatch } from '../session/stats.js';
 import {
+  type CreatedGroup,
   type HistoryAnchor,
   type MediaDownloader,
   type OutgoingMedia,
@@ -129,6 +130,12 @@ class SimSocket implements WaSocketLike {
     for (const k of Object.keys(inner))
       inner[k] = { ...inner[k], directPath: '/fresh', expired: false };
     return { key: m.key, message: inner };
+  }
+
+  async createGroup(subject: string, participants: string[]): Promise<CreatedGroup> {
+    if (!this.user) throw new Error('no conectado');
+    const id = `1203630${Date.now().toString().slice(-11)}@g.us`;
+    return { id, subject, participants: [this.user.id, ...participants] };
   }
 
   async sendText(jid: string, text: string): Promise<unknown> {

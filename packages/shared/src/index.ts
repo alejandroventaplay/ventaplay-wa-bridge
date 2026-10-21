@@ -272,6 +272,17 @@ export interface SendResult {
   remaining: { hour: number; day: number };
 }
 
+/** resultado de crear un grupo desde el número del dueño */
+export interface GroupCreateResult {
+  group: { jid: string; name: string };
+  /** participantes pedidos (sin contar al dueño) */
+  participants: number;
+  /** números que WhatsApp no dejó agregar (por privacidad suelen requerir invitación) */
+  notAdded: string[];
+  /** primer mensaje enviado al grupo, si se pidió */
+  message: ChatMessage | null;
+}
+
 export interface CreateSessionBody {
   label?: string | null;
 }

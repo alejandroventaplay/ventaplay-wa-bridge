@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
+  GroupCreateResult,
   HistoryFetchStatus,
   PersonalChatList,
   PersonalChatMessages,
@@ -16,7 +17,7 @@ import { createAuthenticator } from '../src/http/auth.js';
 import { buildServer } from '../src/http/server.js';
 import { SessionManager } from '../src/session/manager.js';
 import { VAULT_KEY_PREFIX } from '../src/session/message-vault.js';
-import { TRANSCRIPT_PREFIX } from '../src/session/wa-session.js';
+import { toPhoneDigits, TRANSCRIPT_PREFIX } from '../src/session/wa-session.js';
 import { createFakeTranscriber, type Transcriber } from '../src/transcribe/transcriber.js';
 import { createSimulator } from '../src/wa/simulator.js';
 import { silentLogger, tempStore, waitFor } from './helpers.js';
@@ -272,6 +273,59 @@ describe('Mi vista', () => {
       payload: { text: 'hola' },
     });
     expect(nope.statusCode).toBe(404);
+  });
+
+  it('crea un grupo con ALLOW_SEND, manda el primer mensaje y aplica el freno', async () => {
+    const off = await setup('56912345678');
+    const denied = await off.app.inject({
+      method: 'POST',
+      url: `/sessions/${off.id}/personal/groups`,
+      headers: auth,
+      payload: { subject: 'Equipo', participants: ['+56 9 8765 4321'] },
+    });
+    expect(denied.statusCode).toBe(403);
+
+    const { app, id } = await setup('56912345678', { allowSend: true });
+    const create = (payload: object) =>
+      app.inject({
+        method: 'POST',
+        url: `/sessions/${id}/personal/groups`,
+        headers: auth,
+        payload,
+      });
+    const bad = await create({ subject: 'Equipo', participants: ['hola'] });
+    expect(bad.statusCode).toBe(400);
+    const r = await create({
+      subject: 'Equipo AESERVICE',
+      participants: ['+56 9 8765 4321', '987654321', '56912345678'],
+      text: 'Hola a todos 🙌',
+    });
+    expect(r.statusCode).toBe(200);
+    const g = r.json() as GroupCreateResult;
+    expect(g.group.name).toBe('Equipo AESERVICE');
+    expect(g.group.jid).toMatch(/@g\.us$/);
+    // el dueño no se cuenta y los números repetidos se juntan
+    expect(g.participants).toBe(1);
+    expect(g.notAdded).toEqual([]);
+    expect(g.message).toMatchObject({ fromMe: true, text: 'Hola a todos 🙌' });
+    const msgs = (
+      await app.inject({
+        url: `/sessions/${id}/personal/chats/${encodeURIComponent(g.group.jid)}/messages`,
+        headers: auth,
+      })
+    ).json() as PersonalChatMessages;
+    expect(msgs.messages.at(-1)?.text).toBe('Hola a todos 🙌');
+    // otro grupo al tiro: freno
+    expect((await create({ subject: 'Otro', participants: ['+56987654322'] })).statusCode).toBe(
+      429,
+    );
+  });
+
+  it('normaliza números para grupos', () => {
+    expect(toPhoneDigits('+56 9 8765 4321')).toBe('56987654321');
+    expect(toPhoneDigits('987654321')).toBe('56987654321');
+    expect(toPhoneDigits('+1 619 555 0101')).toBe('16195550101');
+    expect(toPhoneDigits('123')).toBeNull();
   });
 
   it('envía fotos y documentos, los guarda y se pueden ver de vuelta', async () => {

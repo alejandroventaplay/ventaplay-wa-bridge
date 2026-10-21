@@ -31,6 +31,11 @@ export interface WaSocketLike {
   /** igual que sendText (solo con ALLOW_SEND): foto, video, audio o documento */
   sendMedia?(jid: string, media: OutgoingMedia): Promise<unknown>;
   /**
+   * Solo con ALLOW_SEND: crea un grupo nuevo (el dueño queda de admin) con esos
+   * participantes (jids). No toca grupos existentes: el resto sigue bloqueado.
+   */
+  createGroup?(subject: string, participants: string[]): Promise<CreatedGroup>;
+  /**
    * Solo para el dueño: le pide a SU teléfono que vuelva a subir la foto/audio de un
    * mensaje viejo cuyo archivo ya expiró en el CDN. No le escribe a nadie más.
    * Devuelve el mensaje con la ruta nueva.
@@ -42,6 +47,13 @@ export interface WaSocketLike {
    * después por `messaging-history.set` con syncType ON_DEMAND.
    */
   fetchHistory?(count: number, oldest: HistoryAnchor, oldestTimestampMs: number): Promise<unknown>;
+}
+
+/** grupo recién creado: id, asunto y participantes que quedaron */
+export interface CreatedGroup {
+  id: string;
+  subject: string;
+  participants: string[];
 }
 
 /** mensaje más antiguo que ya tenemos de un chat: desde ahí se pide hacia atrás */

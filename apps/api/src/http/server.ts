@@ -55,6 +55,11 @@ const SearchQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
 });
 const SendBody = z.object({ text: z.string().min(1).max(4096) });
+const GroupBody = z.object({
+  subject: z.string().min(1).max(100),
+  participants: z.array(z.string().min(1).max(30)).min(1).max(50),
+  text: z.string().max(4096).nullish(),
+});
 const TranscriptBody = z.object({ force: z.boolean().optional() });
 const MetricsQuery = z.object({ days: z.coerce.number().int().min(1).max(3650).optional() });
 const AssistantBody = z.object({
@@ -240,6 +245,21 @@ export async function buildServer(deps: ServerDeps) {
         'envío pedido por el dueño',
       );
       return manager.get(id).sendPersonal(jid, text);
+    });
+
+    /** crea un grupo nuevo desde el número del dueño (ALLOW_SEND, con frenos) */
+    api.post('/sessions/:id/personal/groups', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      const body = GroupBody.parse(req.body ?? {});
+      req.log.info(
+        {
+          session: id,
+          participants: body.participants.length,
+          by: req.principal?.email ?? req.principal?.sub,
+        },
+        'grupo nuevo pedido por el dueño',
+      );
+      return manager.get(id).createPersonalGroup(body);
     });
 
     /** envía una foto, video, audio o documento (mismas reglas y frenos que el texto) */

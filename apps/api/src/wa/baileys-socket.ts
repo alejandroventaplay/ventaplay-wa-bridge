@@ -40,7 +40,7 @@ export interface BaileysFactoryOptions {
   browser?: 'chrome' | 'desktop';
   /** 'latest' = versión vigente de WA Web · 'bundled' = la de Baileys */
   version?: 'latest' | 'bundled';
-  /** expone sendText (solo texto) antes de cerrar el candado; lo demás sigue bloqueado */
+  /** expone sendText/sendMedia y crear grupos antes de cerrar el candado; lo demás sigue bloqueado */
   allowSend?: boolean;
   /** expone reuploadMedia: pedirle al teléfono del dueño que re-suba media vencida */
   allowMediaRetry?: boolean;
@@ -82,6 +82,7 @@ export function createBaileysFactory(opts: BaileysFactoryOptions = {}): SocketFa
     // Única puerta de salida: guardamos el envío original ANTES del candado y solo
     // exponemos texto plano. La sesión decide quién y cuánto puede enviar.
     const original = caps.send ? sock.sendMessage : null;
+    const groupCreate = caps.send ? sock.groupCreate : null;
     const reupload = caps.mediaRetry ? sock.updateMediaMessage : null;
     const history = caps.historyFetch ? sock.fetchMessageHistory : null;
     const blocked = enforceReadOnly(sock);
@@ -95,6 +96,13 @@ export function createBaileysFactory(opts: BaileysFactoryOptions = {}): SocketFa
     if (original) {
       (sock as unknown as WaSocketLike).sendText = (jid, text) => original(jid, { text });
       (sock as unknown as WaSocketLike).sendMedia = (jid, m) => original(jid, toContent(m));
+    }
+    if (groupCreate) {
+      // solo crear: actualizar, salir o agregar gente a grupos existentes sigue bloqueado
+      (sock as unknown as WaSocketLike).createGroup = async (subject, participants) => {
+        const md = await groupCreate(subject, participants);
+        return { id: md.id, subject: md.subject, participants: md.participants.map((p) => p.id) };
+      };
     }
     logger.debug({ blocked: blocked.length }, 'candado de solo lectura aplicado');
     return sock as unknown as WaSocketLike;

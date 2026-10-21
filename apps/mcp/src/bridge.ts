@@ -7,6 +7,7 @@ import type {
   PersonalChatMessages,
   SearchResult,
   SendResult,
+  GroupCreateResult,
   SessionSummary,
   VoiceTranscript,
 } from '@wa-bridge/shared';
@@ -159,6 +160,17 @@ export class BridgeClient {
       },
       120_000,
     );
+  }
+
+  async createGroup(
+    subject: string,
+    participants: string[],
+    text?: string | null,
+  ): Promise<GroupCreateResult> {
+    return this.req(`/sessions/${await this.sid()}/personal/groups`, {
+      method: 'POST',
+      body: JSON.stringify({ subject, participants, text: text ?? null }),
+    });
   }
 
   async send(jid: string, text: string): Promise<SendResult> {
