@@ -9,6 +9,9 @@ import { silentLogger, tempStore, waitFor } from './helpers.js';
 const FAST = { firstQrMs: 10, qrRotateMs: 40, maxQrs: 3, openMs: 20, batchEveryMs: 15 };
 /** QR que dura lo suficiente para "escanearlo" en el test */
 const SCANNABLE = { ...FAST, qrRotateMs: 2000 };
+/** rotación holgada: dibujar un QR (PNG 512px) tarda decenas de ms en runners lentos y no
+ *  debe competir con el 408 que llega al agotarse los intentos */
+const ROTATING = { ...FAST, qrRotateMs: 250 };
 
 let cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -69,15 +72,19 @@ describe('ciclo de vida con el simulador', () => {
   });
 
   it('el QR rota y luego expira sin escaneo; se puede pedir uno nuevo', async () => {
-    const { manager } = await setup();
+    const { manager } = await setup(undefined, ROTATING);
     const { id } = await manager.create(null);
     const s = manager.get(id);
-    await waitFor(() => (s.summary().qr?.sequence ?? 0) >= 2, 2000, 'QR rotado');
-    await waitFor(() => s.status === 'qr_expired', 2000, 'qr_expired');
+    await waitFor(() => (s.summary().qr?.sequence ?? 0) >= 2, 3000, 'QR rotado');
+    await waitFor(() => s.status === 'qr_expired', 3000, 'qr_expired');
+    expect(s.summary().qr).toBeNull();
+    // un QR que terminó de dibujarse después del cierre no revive el estado
+    await new Promise((r) => setTimeout(r, 150));
+    expect(s.status).toBe('qr_expired');
     expect(s.summary().qr).toBeNull();
 
     await manager.connect(id);
-    await waitFor(() => s.status === 'qr' && s.summary().qr, 2000, 'QR nuevo');
+    await waitFor(() => s.status === 'qr' && s.summary().qr, 3000, 'QR nuevo');
     expect(s.summary().qr!.sequence).toBeLessThanOrEqual(2);
   });
 

@@ -1813,7 +1813,15 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
         width: 512,
         color: { dark: QR_COLOR_DARK, light: '#FFFFFF' },
       });
-      if (sequence !== this.qrSequence || gen !== this.generation || this.record.linked) return;
+      // si mientras se dibujaba llegó otro QR, cambió la generación, se vinculó o el socket
+      // ya se cerró (p.ej. 408 → qr_expired), este QR ya no sirve y no debe pisar el estado
+      if (
+        sequence !== this.qrSequence ||
+        gen !== this.generation ||
+        this.record.linked ||
+        this.sock !== sock
+      )
+        return;
       this.qr = { dataUrl, expiresAt, sequence };
       this.attempts = 0;
       this.setStatus('qr', { lastError: null });
@@ -1894,8 +1902,10 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
         break;
     }
 
-    // 408 sin vincular = el QR expiró sin ser escaneado
-    if (!this.record.linked && this.record.status === 'qr' && code === DisconnectReason.timedOut) {
+    // 408 sin vincular y después de haber recibido al menos un QR = el QR expiró sin ser
+    // escaneado (aunque el último QR todavía no haya terminado de dibujarse en una máquina lenta).
+    // Un 408 antes de cualquier QR es un problema de red: ahí sí reintentamos.
+    if (!this.record.linked && this.qrSequence > 0 && code === DisconnectReason.timedOut) {
       this.qr = null;
       this.setStatus('qr_expired', { lastError: null });
       return;
