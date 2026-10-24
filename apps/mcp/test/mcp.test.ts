@@ -28,9 +28,9 @@ describe('conector', () => {
   });
 
   it('normaliza números chilenos', () => {
-    expect(normalizePhone('+56 9 8951 8540')).toBe('56989518540');
-    expect(normalizePhone('989518540')).toBe('56989518540');
-    expect(normalizePhone('89518540')).toBe('56989518540');
+    expect(normalizePhone('+56 9 1234 5678')).toBe('56912345678');
+    expect(normalizePhone('912345678')).toBe('56912345678');
+    expect(normalizePhone('12345678')).toBe('56912345678');
   });
 
   it('encuentra chats por nombre sin tildes, por número o avisa si es ambiguo', () => {

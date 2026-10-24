@@ -234,7 +234,7 @@ export const fold = (s: string) =>
     .replace(/\p{Diacritic}/gu, '')
     .trim();
 
-/** "+56 9 8951 8540", "989518540", "56989518540" → 56989518540 */
+/** "+56 9 1234 5678", "912345678", "56912345678" → 56912345678 */
 export function normalizePhone(input: string): string | null {
   const d = input.replace(/\D/g, '');
   if (d.length < 8) return null;

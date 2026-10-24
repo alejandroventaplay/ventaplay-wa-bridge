@@ -1,5 +1,5 @@
 #!/bin/zsh -il
-# Sube el WA Bridge a GitHub (repo privado). El login en GitHub lo haces tú.
+# Sube el WA Bridge a GitHub. El login en GitHub lo haces tú.
 cd "${0:A:h}" || exit 1
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 REPO="alejandroventaplay/ventaplay-wa-bridge"
@@ -31,8 +31,8 @@ elif gh repo view "$REPO" >/dev/null 2>&1; then
   git remote add origin "https://github.com/$REPO.git"
   git push -u origin HEAD || { echo "Falló git push"; pausa; exit 1; }
 else
-  echo "Creando $REPO (privado) y subiendo el código..."
-  gh repo create "$REPO" --private --source . --remote origin --push \
+  echo "Creando $REPO y subiendo el código..."
+  gh repo create "$REPO" --public --source . --remote origin --push \
     --description "VentaPlay WA Bridge: vincula un WhatsApp por QR y lee contactos y chats para migrarlos (solo lectura)" \
     || { echo "Falló crear el repo"; pausa; exit 1; }
 fi

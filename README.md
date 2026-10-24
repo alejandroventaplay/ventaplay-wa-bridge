@@ -1,7 +1,8 @@
 # VentaPlay WA Bridge
 
-Herramienta interna de VentaPlay: vincula un WhatsApp **por QR** como dispositivo
-y **lee** sus contactos, chats e historial para migrarlos a VentaPlay.
+Proyecto **open source** de VentaPlay (licencia [MIT](LICENSE)): vincula un WhatsApp **por QR**
+como dispositivo, **lee** sus contactos, chats e historial y, en tu propio computador, lo
+convierte en el asistente de WhatsApp de Claude.
 
 > **Solo lectura, por diseño.** No envía mensajes, no marca chats como leídos y no
 > aparece "en línea". Los métodos de escritura de Baileys quedan bloqueados en el
@@ -139,11 +140,15 @@ Notas:
 - El servidor tiene que poder abrir un **WebSocket** a `web.whatsapp.com`. Algunos
   proxies o sandboxes lo bloquean (también da 428 antes del QR).
 
-## Repositorio
+## Repositorio y contribuciones
 
-`Subir-a-GitHub.command` (doble clic en Mac) crea el repo privado
-`alejandroventaplay/ventaplay-wa-bridge` con GitHub CLI y sube el código; si ya
-existe, solo hace `git push`. El login en GitHub lo hace la persona, en el navegador.
+El código vive en [github.com/alejandroventaplay/ventaplay-wa-bridge](https://github.com/alejandroventaplay/ventaplay-wa-bridge)
+(público, licencia MIT). Se aceptan Pull Requests desde forks; **solo el mantenedor hace
+merge** a `main`. Lee [CONTRIBUTING.md](CONTRIBUTING.md) antes de abrir uno y
+[SECURITY.md](SECURITY.md) si encontraste una vulnerabilidad.
+
+`Subir-a-GitHub.command` (doble clic en Mac) sube el código con GitHub CLI; si el repo no
+existe, lo crea. El login en GitHub lo hace la persona, en el navegador.
 
 ## Comandos
 

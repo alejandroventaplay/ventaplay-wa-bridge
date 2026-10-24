@@ -11,3 +11,6 @@ coverage/
 .dev-runner/
 # salida del build del conector (se genera con pnpm --filter @wa-bridge/mcp pack)
 apps/mcp/bundle/server/
+
+# salidas locales de Claude
+Claude outputs/

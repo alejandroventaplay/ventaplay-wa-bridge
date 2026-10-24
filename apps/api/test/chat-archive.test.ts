@@ -3,7 +3,7 @@ import { ChatArchive, MEDIA_KEY } from '../src/session/chat-archive.js';
 import type { StoredMessage } from '../src/session/message-vault.js';
 
 const G = '120363412234546089@g.us';
-const ME = { meJid: '56989518540@s.whatsapp.net', meLid: '111@lid' };
+const ME = { meJid: '56912345678@s.whatsapp.net', meLid: '111@lid' };
 const LEON = '56911111111@s.whatsapp.net';
 
 const msg = (id: string, message: object, extra: Record<string, unknown> = {}) => ({
@@ -24,7 +24,7 @@ describe('archivo de proyectos', () => {
         msg('A1', { conversation: 'hola' }),
         msg('A2', {
           extendedTextMessage: {
-            text: 'te mando la factura @56989518540',
+            text: 'te mando la factura @56912345678',
             contextInfo: {
               stanzaId: 'A1',
               participant: LEON,
