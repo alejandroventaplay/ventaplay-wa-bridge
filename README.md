@@ -1,116 +1,150 @@
 # VentaPlay WA Bridge
 
-Proyecto **open source** de VentaPlay (licencia [MIT](LICENSE)): vincula un WhatsApp **por QR**
-como dispositivo, **lee** sus contactos, chats e historial y, en tu propio computador, lo
-convierte en el asistente de WhatsApp de Claude.
+[![CI](https://github.com/alejandroventaplay/ventaplay-wa-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/alejandroventaplay/ventaplay-wa-bridge/actions/workflows/ci.yml)
+[![Licencia MIT](https://img.shields.io/badge/licencia-MIT-450693.svg)](LICENSE)
+![Node 22+](https://img.shields.io/badge/node-%3E%3D22-08c8a7.svg)
+![MCP](https://img.shields.io/badge/Claude-MCP%20%2B%20skill-8c00ff.svg)
 
-> **Solo lectura, por diseño.** No envía mensajes, no marca chats como leídos y no
-> aparece "en línea". Los métodos de escritura de Baileys quedan bloqueados en el
-> socket (`apps/api/src/wa/read-only.ts`), un test revisa que sigan bloqueados y una
-> regla de ESLint impide llamarlos.
+**Respalda un WhatsApp donde se mezcla lo personal con el trabajo, separa lo personal de lo
+laboral y lleva solo lo laboral a un CRM que opera con la plataforma oficial de WhatsApp.**
+De paso, conecta tu WhatsApp con Claude en tu propio computador.
 
-## Instalarlo en otro equipo (compartir)
+Proyecto **open source** (MIT) de [VentaPlay](https://ventaplay.com), hecho en Chile y
+abierto a la comunidad.
 
-En la página de inicio del Bridge, sección **Instala y comparte tu asistente**, están los
-descargables (se arman al vuelo desde esta carpeta, sin `.env`, mensajes ni `node_modules`):
-el **Bridge** (`ventaplay-wa-bridge.zip`), el **conector** para Claude Desktop
-(`WhatsApp-Asistente.mcpb`), la **skill** (`skill-whatsapp-asistente.zip`) y el **kit
-completo** con la guía. La guía paso a paso está en [`INSTALAR.md`](INSTALAR.md).
-Lanzadores: `Iniciar-WA-Bridge.command` (Mac) e `Iniciar-WA-Bridge.cmd` (Windows).
+> **English summary.** WA Bridge links a WhatsApp account as a companion device (QR or
+> pairing code), backs up its history encrypted on your own machine, helps you split
+> personal chats from business ones with a local, reviewable filter, and imports only the
+> business side into a CRM that runs on the official WhatsApp Business Platform. It also
+> ships an MCP connector and a skill so Claude can read, search and summarize your WhatsApp
+> locally. Read-only by design, with a few explicit, consented exceptions. Code and UI are in
+> Spanish; contributions in any language are welcome.
 
-## Mi vista (solo tu número)
+## ¿Por qué existe?
 
-Si el WhatsApp vinculado es el del dueño (`OWNER_PHONE` en `apps/api/.env`), la
-sesión muestra dos pestañas: **Mi vista** y **General** (la de siempre).
+Muchos negocios chicos en Latinoamérica atienden por el WhatsApp de su dueño o dueña: el mismo número para clientes, proveedores, familia y amigos. Cuando ese negocio
+quiere ordenarse —un CRM, agenda, cobros, un agente con IA sobre la **plataforma formal de
+WhatsApp** (WhatsApp Business Platform / Cloud API)—, aparece el problema:
 
-- Mi vista separa **Conversaciones** y **Grupos** y los muestra como WhatsApp: los
-  chats con actividad en los **últimos 30 días** y sus **últimos 10 mensajes**, con
-  fotos, audios, videos, stickers y documentos. Si el enlace del archivo ya venció
-  (pasa a las ~2–4 semanas), el Bridge le pide a **tu propio teléfono** que lo vuelva a
-  subir (`updateMediaMessage`, solo para `OWNER_PHONE`, 2 a la vez) y guarda la ruta
-  nueva; si el teléfono ya no lo tiene, se ve la miniatura.
-- Es la única excepción a "no guardar contenido": esos mensajes se guardan
-  **cifrados** junto a las credenciales y se **borran al desconectar**. Con cualquier
-  otro número no se guarda nada y la pestaña no aparece.
-- No marca como leído ni cambia tu presencia. Enviar y pedir re-subidas de media
-  solo funcionan para tu número (ver más abajo).
-- El contenido llega por el History Sync al vincular y luego en vivo. Si el número
-  se vinculó antes de activar `OWNER_PHONE`, hay que volver a vincularlo una vez.
+- años de conversaciones con clientes que no se quieren perder,
+- mezcladas con conversaciones personales que **no** deben llegar a ningún sistema,
+- y ninguna forma oficial de exportar todo eso de manera ordenada.
 
-## Claude como asistente de tu WhatsApp
+El WA Bridge resuelve ese paso:
 
-`apps/mcp` es un conector MCP (extensión `.mcpb` para la app de Claude) que llama al
-Bridge de tu Mac. Herramientas: `whatsapp_estado`, `whatsapp_listar_chats`,
-`whatsapp_leer_chat`, `whatsapp_buscar`, `whatsapp_pendientes`, `whatsapp_enviar` y
-`whatsapp_enviar_archivo` (fotos o archivos del Mac por su ruta).
+1. **Respaldar** el historial del WhatsApp actual, cifrado y en tu equipo.
+2. **Filtrar** lo personal de lo laboral, con sugerencias automáticas y revisión de la persona
+   dueña del WhatsApp.
+3. **Aprobar** la lista final y **cargar** solo lo laboral al CRM. Nosotros usamos
+   [VentaPlay](https://ventaplay.com), pero el formato de salida (Excel relacional y APIs de
+   importación) sirve de base para cualquier CRM.
+4. **Seguir usando** el WhatsApp de siempre: el Bridge es un dispositivo vinculado más, como
+   WhatsApp Web.
 
-- Se instala una vez con doble clic en `WhatsApp-Alejandro.mcpb`. Lee el token y el
-  puerto de `apps/api/.env`, así que no hay que pegar nada.
-- Para el asistente se guardan hasta **300 mensajes por chat de los últimos 90 días**
-  (cifrados). Mi vista sigue mostrando 30 días y 10 mensajes.
-- **Enviar** solo funciona con `ALLOW_SEND=true` y `OWNER_PHONE`. Texto, fotos, videos,
-  audios y documentos (máx. 16 MB; JPG/PNG/MP4 van en línea, lo demás como documento),
-  solo a chats que ya existen y con frenos: 8 por minuto, 40 por hora, 150 al día y unos
-  segundos entre mensajes al mismo chat. El log no guarda el texto ni el archivo. Claude siempre
-  muestra el destinatario y el texto y espera tu confirmación. El resto del candado
-  sigue cerrado: no marca leído, no cambia presencia, no toca grupos.
-- **Mi vista** tiene caja para escribir: Enter envía, Shift+Enter salto de línea, clip
-  para adjuntar, pegar o arrastrar un archivo, y opción de mandar una foto como documento.
-- Regenerar el conector: `pnpm --filter @wa-bridge/mcp pack` → `apps/mcp/dist/whatsapp-alejandro.mcpb`.
+Y algo que nos pareció valioso compartir: **conectar WhatsApp con Claude** (MCP + skill) sin
+subir tus mensajes a ningún servidor.
 
-## Proyectos: chats aislados para analizar
-
-Desde **Mi vista** → un chat → **Aislar como proyecto**. Desde ese momento se guarda
-**todo** lo de ese chat (sin el tope de 300 / 90 días): cada mensaje con su autor
-(número, LID, nombre), tipo, texto, a qué responde, menciones, reenvíos, ediciones con
-el texto anterior, borrados (sin perder lo que decía), reacciones, recibos de lectura y
-el mensaje original de WhatsApp. La media se baja sola (HTTPS al CDN), se verifica su
-hash y se guarda cifrada.
-
-Cada proyecto tiene su pestaña al lado de **General** y una carpeta que se reescribe
-sola tras cada cambio, lista para analizar:
+## Cómo funciona
 
 ```
-apps/api/data/proyectos/<nombre>/
-  proyecto.json    resumen + participantes
-  mensajes.jsonl   un mensaje por línea, con todos los datos y el original
-  mensajes.xlsx    Mensajes · Participantes · Resumen
-  media/           fecha_id_nombre-original.ext
+ WhatsApp del negocio ──QR / código──▶ WA Bridge (tu computador)
+                                         │  History Sync + mensajes en vivo
+                                         ▼
+                                   bóveda cifrada (AES-256-GCM)
+                                         │
+                       ┌─────────────────┼──────────────────┐
+                       ▼                 ▼                  ▼
+              Excel de contactos   Filtro personal /    Claude (MCP + skill)
+              y conversaciones     interés laboral      lee, busca, resume
+                                         │  revisión + aprobación final
+                                         ▼
+                              CRM con WhatsApp oficial (APIs import-*)
+                                         │  opcional, con autorización
+                                         ▼
+                        clientes del CRM como contactos en el WhatsApp
 ```
 
-(`PROJECTS_DIR` cambia la carpeta.) Lo guardado en el Bridge se borra al desvincular,
-como la bóveda; la carpeta exportada queda.
+## Qué hace
 
-## Sprint 1 — qué hay
+### Respaldar
 
-- QR con la marca de VentaPlay (logo al centro, corrección de errores alta) que se
-  renueva solo, con cuenta regresiva.
-- Conectar y desconectar. El botón "Desconectar" desvincula el dispositivo en el
-  teléfono y borra las credenciales.
-- Información general al conectar: perfil (nombre, número, foto, Business,
-  categoría), contactos, chats, grupos, mensajes, rango de fechas del historial,
-  progreso del History Sync en vivo y los 10 chats con más mensajes.
-- Varias sesiones a la vez, con reconexión automática si se reinicia el servidor.
-- Credenciales y datos de cada sesión **cifrados** (AES-256-GCM) en disco o en
-  Postgres (Supabase).
-- Login: token compartido (`API_TOKEN`) o Supabase Auth, solo con correos `@ventaplay.com`.
-- Modo **simulador** para desarrollar la UI sin teléfono.
+- **Vincular por QR** (con la marca de VentaPlay, cuenta regresiva y "Reiniciar (60 s)" para
+  tener más tiempo) **o por código de 8 letras** cuando el teléfono no está al lado. El código
+  se puede mandar por WhatsApp desde tu propio agente con un clic.
+- **Modo migración** con consentimiento: queda registrado quién autoriza. Guarda **todo** el
+  historial que entrega el teléfono (sin tope de días) y lo que llega en vivo.
+- **Información al conectar**: perfil, contactos, chats, grupos, rango de fechas, progreso del
+  History Sync y los chats con más mensajes.
+- **Excel de contactos** (útil para el CRM o completo) y **Excel de conversaciones** (hojas
+  Chats y Mensajes, unidas al de contactos por un ID: una base de datos liviana).
 
-## Estructura
+### Filtro personal / interés laboral
 
-```
-apps/api         Fastify + Baileys v7 · sesiones, QR, SSE, cifrado
-apps/web         Vite + React + Tailwind · UI con la marca VentaPlay
-packages/shared  tipos compartidos (SessionSummary, SyncStats…)
-```
+Antes de que algo salga del Bridge, una pantalla para separar lo personal de lo laboral:
+
+- **Sugiere** por contacto _interés laboral_, _personal_ o _por revisar_, y **explica por
+  qué**: cómo está guardado en la agenda ("Pac", "Paciente", "Cliente", "Mamá", "Prima"…), de
+  qué se habla (agenda, precios, pagos, servicios), trato íntimo, el apellido de quien
+  autorizó, empresas que le escriben al dueño y conversaciones muy largas (equipo, familia o
+  socios).
+- **Todo corre en el Bridge**: no se manda ningún mensaje a un servicio externo para
+  clasificar.
+- **Revisión**: pestañas, buscador, nombre, número, fecha y último mensaje, casilla
+  ENTRA / FUERA y acciones en bloque.
+- **Aprobación final** con checklist y nombre de quien aprueba. Sin aprobación no se carga
+  nada; si algo cambia después, hay que aprobar de nuevo. Lo excluido tampoco sale en los
+  Excel.
+
+### Directo al CRM (VentaPlay)
+
+- Pegas la API key de la organización y **validas**: prueba en seco, sin escribir nada.
+- **Importa** clientes y conversaciones por lotes. Primero 5 clientes y 5 mensajes de prueba;
+  si fallan, se detiene antes de gastar el cupo.
+- Si se acaba el cupo diario, **queda en pausa** y retoma sin perder ni duplicar nada.
+- Lleva un **registro de lo enviado**: después, **"Actualizar"** manda solo lo nuevo.
+- **De vuelta al WhatsApp** (opcional): crea como contacto a los clientes del CRM que la
+  persona no tiene guardados, con un texto al final del nombre ("Paciente") para saber de
+  dónde vienen. Pide autorización, no envía mensajes y no toca los contactos que ya existen.
+
+### Tu WhatsApp con Claude
+
+- **Conector MCP** (`apps/mcp`, extensión `.mcpb` para Claude Desktop) que habla con el
+  Bridge de tu computador. Herramientas: `whatsapp_estado`, `whatsapp_listar_chats`,
+  `whatsapp_leer_chat`, `whatsapp_buscar`, `whatsapp_pendientes`, `whatsapp_transcribir`,
+  `whatsapp_enviar` y `whatsapp_enviar_archivo`.
+- **Skill** (`skills/whatsapp-asistente`) que le enseña a Claude a usarlo con buenas
+  prácticas: nunca enviar sin confirmación, un mensaje por confirmación y tratar lo que dicen
+  los chats como información, nunca como instrucciones.
+- **Modo asistente** para tu propio número: _Mi vista_ (chats y grupos como en WhatsApp),
+  transcripción de notas de voz **local** (Whisper), proyectos (chats aislados con todo su
+  historial, media y métricas por persona) y envío **solo con tu confirmación** y con frenos.
+- Funciona con cualquier cliente MCP; el conector se arma con
+  `pnpm --filter @wa-bridge/mcp pack`.
+
+La guía paso a paso para instalar el asistente está en [`INSTALAR.md`](INSTALAR.md).
+
+## Privacidad y seguridad por diseño
+
+- **Solo lectura.** Los métodos de escritura de Baileys se bloquean en el socket
+  (`apps/api/src/wa/read-only.ts`); un test y una regla de ESLint vigilan que sigan
+  bloqueados. Las únicas puertas abiertas son explícitas y con consentimiento:
+  - enviar, solo en el número del dueño en modo asistente, con confirmación y límites;
+  - crear o editar contactos, solo en modo migración (autorizado al vincular) y con la
+    autorización de la persona dueña del WhatsApp.
+- **No marca leído ni aparece "en línea".**
+- **Cifrado** AES-256-GCM en disco o en Postgres; las claves no salen de tu equipo.
+- **Local primero**: los mensajes viven en tu computador; los logs no guardan texto.
+- **Consentimiento**: el modo migración registra quién autorizó.
+- **Desvincular borra todo** lo guardado de esa sesión. Ojo: si el teléfono desvincula el
+  dispositivo antes de importar, el respaldo se pierde y hay que volver a vincular.
 
 ## Correr en local
 
-Requisitos: Node 22 o más. pnpm se instala solo si falta.
+Requisitos: Node 22 o más (pnpm se instala solo si falta).
 
-**En Mac, con doble clic:** abre `Iniciar-WA-Bridge.command` (la primera vez:
-clic derecho → Abrir). Instala dependencias, levanta API y web y abre
-http://localhost:5190.
+**En Mac o Windows, con doble clic:** `Iniciar-WA-Bridge.command` (Mac; la primera vez clic
+derecho → Abrir) o `Iniciar-WA-Bridge.cmd` (Windows). Instala dependencias, levanta API y web
+y abre http://localhost:5190.
 
 **A mano:**
 
@@ -121,80 +155,111 @@ cp apps/web/.env.example apps/web/.env
 pnpm dev            # API en :4010 y web en :5190
 ```
 
-Abre http://localhost:5190 y entra con el `API_TOKEN` del `.env`.
+Entra con el `API_TOKEN` del `.env`.
 
-- **Con el simulador** (`WA_DRIVER=simulator`, viene así en `.env.example`): aparece un
-  botón "Simular escaneo" que trae un historial falso.
-- **Con WhatsApp real**: cambia a `WA_DRIVER=baileys` en `apps/api/.env`, reinicia y
-  escanea con el teléfono (WhatsApp → Dispositivos vinculados → Vincular un dispositivo).
-  Deja el teléfono encendido mientras se copia el historial.
+- **Con el simulador** (`WA_DRIVER=simulator`, viene así en `.env.example`): un botón
+  "Simular escaneo" trae un historial falso. No necesitas teléfono para desarrollar.
+- **Con WhatsApp real**: `WA_DRIVER=baileys`, reinicia y vincula. **Deja WhatsApp abierto en
+  primer plano en el teléfono** hasta que termine el historial: el teléfono es el que lo sube
+  y en segundo plano se corta.
 
-Notas:
+## Estructura
 
-- La web llama a la API por `/wa-api` (proxy de Vite al puerto 4010). Así comparten
-  origen y ningún navegador bloquea las llamadas.
-- Nos presentamos ante WhatsApp como **WhatsApp Web en Chrome** (`WA_BROWSER=chrome`).
-  Como "WhatsApp Desktop" el teléfono daría más historial, pero hoy WhatsApp corta la
-  conexión al registrar (código 428).
-- Para diagnosticar, `LOG_FILE=./data/api.log` deja los logs también en un archivo.
-- El servidor tiene que poder abrir un **WebSocket** a `web.whatsapp.com`. Algunos
-  proxies o sandboxes lo bloquean (también da 428 antes del QR).
-
-## Repositorio y contribuciones
-
-El código vive en [github.com/alejandroventaplay/ventaplay-wa-bridge](https://github.com/alejandroventaplay/ventaplay-wa-bridge)
-(público, licencia MIT). Se aceptan Pull Requests desde forks; **solo el mantenedor hace
-merge** a `main`. Lee [CONTRIBUTING.md](CONTRIBUTING.md) antes de abrir uno y
-[SECURITY.md](SECURITY.md) si encontraste una vulnerabilidad.
-
-`Subir-a-GitHub.command` (doble clic en Mac) sube el código con GitHub CLI; si el repo no
-existe, lo crea. El login en GitHub lo hace la persona, en el navegador.
+```
+apps/api         Fastify + Baileys 7 · sesiones, QR, SSE, cifrado, filtro, importación
+apps/web         Vite + React 19 + Tailwind 4 · la interfaz
+apps/mcp         conector MCP (.mcpb) para Claude Desktop y otros clientes MCP
+packages/shared  tipos compartidos entre API y web
+skills/          skill de Claude para el asistente de WhatsApp
+```
 
 ## Comandos
 
-| Comando          | Qué hace                                  |
-| ---------------- | ----------------------------------------- |
-| `pnpm dev`       | API + web con recarga                     |
-| `pnpm test`      | tests de API (vitest) y web               |
-| `pnpm typecheck` | TypeScript estricto en todo el monorepo   |
-| `pnpm lint`      | ESLint (incluye la regla de solo lectura) |
-| `pnpm build`     | build de producción (`apps/*/dist`)       |
+| Comando             | Qué hace                                  |
+| ------------------- | ----------------------------------------- |
+| `pnpm dev`          | API + web con recarga                     |
+| `pnpm test`         | tests (vitest) de API, web y conector     |
+| `pnpm typecheck`    | TypeScript estricto en todo el monorepo   |
+| `pnpm lint`         | ESLint (incluye la regla de solo lectura) |
+| `pnpm format:check` | Prettier                                  |
+| `pnpm build`        | build de producción (`apps/*/dist`)       |
+
+## Configuración (`apps/api/.env`)
+
+| Variable               | Para qué                                                       |
+| ---------------------- | -------------------------------------------------------------- |
+| `WA_DRIVER`            | `baileys` (WhatsApp real) o `simulator`                        |
+| `API_TOKEN`            | token para entrar a la web y a la API (mín. 16 caracteres)     |
+| `ENCRYPTION_KEY`       | 32 bytes en hex; obligatoria en producción                     |
+| `STORAGE` / `DATA_DIR` | `file` (carpeta cifrada) o `postgres` con `DATABASE_URL`       |
+| `SUPABASE_URL`         | login con Supabase Auth, limitado a `ALLOWED_EMAIL_DOMAINS`    |
+| `WIPE_ON_LOGOUT`       | borra lo guardado si el teléfono desvincula el dispositivo     |
+| `TRANSCRIBE`           | transcripción local de notas de voz (modo asistente)           |
+| `WA_BROWSER`           | `chrome` (WhatsApp Web, recomendado)                           |
+| `VENTAPLAY_API_URL`    | apunta la importación a otro entorno (por defecto, producción) |
+| `LOG_FILE`             | además escribe los logs en un archivo                          |
+
+El resto está comentado en [`apps/api/.env.example`](apps/api/.env.example).
 
 ## API
 
 Todas las rutas, salvo `/health`, piden `Authorization: Bearer <token>` (o
-`?access_token=` en los streams SSE).
+`?access_token=` en los streams SSE). Las principales:
 
-| Método y ruta                                        | Para qué                                                             |
-| ---------------------------------------------------- | -------------------------------------------------------------------- |
-| `GET /health`                                        | estado, driver, tipo de auth                                         |
-| `GET /sessions`                                      | lista de sesiones                                                    |
-| `POST /sessions` `{label}`                           | crea una sesión y arranca el QR                                      |
-| `GET /sessions/:id`                                  | resumen (estado, QR, perfil, estadísticas)                           |
-| `GET /sessions/:id/events`                           | SSE: QR que rota, estado y sync en vivo                              |
-| `GET /events`                                        | SSE de todas las sesiones                                            |
-| `GET /sessions/:id/export/contacts.xlsx`             | Excel de contactos y grupos (sin mensajes)                           |
-| `GET /sessions/:id/personal/chats`                   | Mi vista: chats y grupos de los últimos 30 días (solo `OWNER_PHONE`) |
-| `GET /sessions/:id/personal/chats/:jid/messages`     | Mi vista: últimos 10 mensajes del chat                               |
-| `GET /sessions/:id/personal/chats/:jid/media/:msgId` | Mi vista: foto, audio, video o documento                             |
-| `POST /sessions/:id/connect`                         | QR nuevo / reintentar                                                |
-| `POST /sessions/:id/logout`                          | desvincula el teléfono, conserva estadísticas                        |
-| `DELETE /sessions/:id`                               | desvincula y borra todo                                              |
+| Ruta                                                    | Para qué                                              |
+| ------------------------------------------------------- | ----------------------------------------------------- |
+| `GET /sessions` · `POST /sessions`                      | listar y crear sesiones                               |
+| `GET /sessions/:id` · `GET /sessions/:id/events`        | resumen y SSE (QR que rota, estado, sync)             |
+| `POST /sessions/:id/pairing-code`                       | vincular con código de 8 letras                       |
+| `POST /sessions/:id/migration`                          | modo migración con consentimiento                     |
+| `GET /sessions/:id/export/contacts.xlsx`                | Excel de contactos                                    |
+| `GET /sessions/:id/export/conversations.xlsx`           | Excel de conversaciones (modo migración)              |
+| `GET` · `POST /sessions/:id/privacy`                    | filtro personal / laboral: lista, decisiones, aprobar |
+| `POST /sessions/:id/ventaplay/validate` · `/import`     | validar (en seco) e importar al CRM                   |
+| `GET /sessions/:id/ventaplay`                           | avance, registro de lo enviado, estado del filtro     |
+| `POST /sessions/:id/ventaplay/contacts/plan` · `/start` | clientes del CRM como contactos en el WhatsApp        |
+| `POST /sessions/:id/assistant`                          | modo asistente (dueño)                                |
+| `GET /sessions/:id/personal/*`                          | Mi vista, búsqueda, media, transcripción (dueño)      |
+| `GET` · `POST /sessions/:id/projects`                   | chats aislados como proyecto                          |
+| `POST /sessions/:id/logout` · `DELETE /sessions/:id`    | desvincular y borrar                                  |
+
+La lista completa está en [`apps/api/src/http/server.ts`](apps/api/src/http/server.ts).
 
 ## Producción
 
-- **API**: necesita un proceso siempre encendido (no serverless). `apps/api/Dockerfile`
-  sirve para Railway, Fly.io o un VPS. Variables obligatorias: `NODE_ENV=production`,
-  `ENCRYPTION_KEY`, y `SUPABASE_URL` o `API_TOKEN`. Con `STORAGE=file` monta un
-  volumen en `/app/data`; con `STORAGE=postgres` define `DATABASE_URL` (las tablas
-  `wa_bridge_*` se crean solas, con RLS activado).
-- **Web**: build estático (`apps/web/dist`), listo para Vercel. Variables:
-  `VITE_API_URL` y, si se usa Supabase, `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`.
+- **API**: proceso siempre encendido (no serverless). `apps/api/Dockerfile` sirve para
+  Railway, Fly.io o un VPS. Obligatorias: `NODE_ENV=production`, `ENCRYPTION_KEY` y
+  `SUPABASE_URL` o `API_TOKEN`. Con `STORAGE=postgres` las tablas `wa_bridge_*` se crean
+  solas, con RLS.
+- **Web**: build estático (`apps/web/dist`), por ejemplo en Vercel, con `VITE_API_URL`.
+- El servidor tiene que poder abrir un WebSocket a `web.whatsapp.com`.
 
-## Riesgos conocidos
+## Límites que conviene saber
 
-- Baileys no es oficial. Leer baja mucho el riesgo de bloqueo, pero cada número
-  conectado es un número que podríamos perder. Desvincula apenas termine la migración.
-- El teléfono decide cuánto historial entrega; la UI muestra el rango real recibido.
-- Pide consentimiento por escrito al cliente antes de conectar su WhatsApp
-  (incluye datos personales de terceros).
+- **No es oficial.** Usa [Baileys](https://github.com/WhiskeySockets/Baileys), que habla el
+  protocolo de WhatsApp Web. Leer baja mucho el riesgo, pero cada número vinculado es un
+  número que se podría perder. Úsalo para migrar y respaldar; para operar el negocio, la
+  plataforma oficial.
+- **El teléfono decide cuánto historial entrega**, y solo al vincular. Si alguien cambió de
+  teléfono sin respaldo, el historial parte desde ese día.
+- **Datos de terceros**: pide consentimiento por escrito antes de vincular un WhatsApp que no
+  es tuyo y usa el filtro antes de llevar nada a otro sistema.
+
+## Contribuir
+
+Nos encantaría que este proyecto le sirva a otros negocios y equipos. Ideas donde una mano
+suma mucho:
+
+- **Otros CRM**: un adaptador de importación además de VentaPlay (HubSpot, Odoo, Pipedrive…).
+- **El filtro** en otros rubros e idiomas: palabras y reglas para talleres, restaurantes,
+  tiendas, inglés o portugués.
+- **Interfaz en inglés** (hoy está en español).
+- **Archivos**: llevar fotos y documentos al CRM (hoy van como nota).
+- **Más herramientas MCP** para el asistente.
+
+Los cambios entran por Pull Request desde un fork; lee [CONTRIBUTING.md](CONTRIBUTING.md). Si
+encontraste una vulnerabilidad, escríbenos según [SECURITY.md](SECURITY.md).
+
+## Licencia
+
+[MIT](LICENSE) © 2026 Tecnologías Legit SpA (VentaPlay).

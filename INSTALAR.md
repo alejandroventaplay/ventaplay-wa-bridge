@@ -4,6 +4,11 @@ Con esto Claude puede leer, buscar y resumir tu WhatsApp, transcribir tus notas 
 (si lo permites) responder por ti, **siempre con tu confirmación**. Todo corre en **tu
 computador**: tus mensajes no se suben a ningún servidor.
 
+> ¿Buscas respaldar un WhatsApp donde se mezcla lo personal con el trabajo y pasar solo lo
+> laboral a un CRM? Eso se hace desde la web del Bridge con **Migrar a VentaPlay**, el
+> **filtro personal / interés laboral** y **Directo a VentaPlay**: ver el [README](README.md).
+> Esta guía es para el asistente con Claude.
+
 Son 3 piezas:
 
 | Pieza          | Archivo                        | Qué es                                                         |

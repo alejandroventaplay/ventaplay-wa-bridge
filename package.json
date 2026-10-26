@@ -2,7 +2,7 @@
   "name": "ventaplay-wa-bridge",
   "private": true,
   "version": "0.1.0",
-  "description": "VentaPlay WA Bridge — vincula WhatsApp por QR (solo lectura) para migrar contactos y chats a VentaPlay",
+  "description": "Respalda un WhatsApp mezclado (personal y trabajo), separa lo personal de lo laboral y lleva solo lo laboral a un CRM con la plataforma oficial de WhatsApp. Incluye conector MCP y skill para Claude.",
   "type": "module",
   "packageManager": "pnpm@10.28.0",
   "engines": {
