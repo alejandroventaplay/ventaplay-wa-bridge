@@ -127,6 +127,25 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
   }
 
   /**
+   * Manda el código de vinculación por WhatsApp desde el agente conectado (la sesión
+   * asistente con envío). El texto lo arma el servidor.
+   */
+  async sendPairingCode(id: string): Promise<SessionSummary> {
+    const target = this.get(id);
+    const pairing = target.summary().pairing;
+    if (!pairing) throw new HttpError(409, 'no_code', 'Primero pide el código de vinculación');
+    const agent = [...this.sessions.values()].find(
+      (s) => s.id !== id && s.isAssistant && s.status === 'connected',
+    );
+    if (!agent)
+      throw new HttpError(409, 'no_agent', 'No hay un agente de WhatsApp conectado para enviarlo');
+    await agent.sendLinkingCode(pairing.phone, pairingMessage(pairing.code));
+    const who = agent.summary();
+    target.markPairingSent(who.profile?.name ?? who.label ?? `+${who.profile?.phone ?? ''}`);
+    return target.summary();
+  }
+
+  /**
    * Activa o apaga el modo migración. Al activarlo en una sesión vinculada se desvincula
    * y se pide un QR nuevo: WhatsApp manda el historial solo al escanear.
    */
@@ -221,4 +240,15 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
     this.sessions.set(record.id, session);
     return session;
   }
+}
+
+/** mensaje con el código y los pasos para vincular (lo manda el agente) */
+export function pairingMessage(code: string): string {
+  return [
+    `Hola! Este es tu código para vincular el WhatsApp con VentaPlay: *${code}*`,
+    '',
+    '1. Abre WhatsApp → Configuración (o ⋮) → Dispositivos vinculados → Vincular un dispositivo.',
+    '2. Abajo de la cámara toca "Vincular con el número de teléfono".',
+    '3. Escribe el código. Vence en unos 2 minutos.',
+  ].join('\n');
 }

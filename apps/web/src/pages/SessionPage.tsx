@@ -38,6 +38,28 @@ export function SessionPage() {
   const [params, setParams] = useSearchParams();
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const owner = Boolean(session?.personal);
+  // agente (asistente con envío) que puede mandar el código de vinculación por WhatsApp
+  const [agentName, setAgentName] = useState<string | null>(null);
+  const waiting = session
+    ? !session.profile && ['qr', 'qr_expired', 'starting', 'logged_out'].includes(session.status)
+    : false;
+  useEffect(() => {
+    if (!waiting) return;
+    let alive = true;
+    api
+      .list()
+      .then((list) => {
+        const a = list.find(
+          (s) =>
+            s.id !== id && s.assistant?.enabled && s.assistant.send && s.status === 'connected',
+        );
+        if (alive) setAgentName(a ? (a.profile?.name ?? a.label ?? 'tu agente') : null);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [id, waiting]);
 
   // proyectos (chats aislados): pestañas al lado de General
   useEffect(() => {
@@ -243,6 +265,8 @@ export function SessionPage() {
             busy={busy}
             onNewQr={() => void run(() => api.connect(id))}
             onPairingCode={async (phone) => setSession(await api.requestPairingCode(id, phone))}
+            onSendPairing={async () => setSession(await api.sendPairingCode(id))}
+            pairingSender={agentName}
             onSimulateScan={
               simulator ? () => void run(async () => void (await api.simulateScan(id))) : undefined
             }

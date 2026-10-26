@@ -442,6 +442,16 @@ export async function buildServer(deps: ServerDeps) {
       return { session: await manager.requestPairing(id, phone) };
     });
 
+    /** manda el código de vinculación por WhatsApp desde el agente conectado */
+    api.post('/sessions/:id/pairing-code/send', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      req.log.info(
+        { session: id, by: req.principal?.email ?? req.principal?.sub },
+        'enviar código de vinculación por el agente',
+      );
+      return { session: await manager.sendPairingCode(id) };
+    });
+
     // ------------------------------------------- migración a VentaPlay
 
     /** activa / apaga el modo migración (guardar las conversaciones de este número) */

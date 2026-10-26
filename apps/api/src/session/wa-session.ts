@@ -407,6 +407,38 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     return this.pairing;
   }
 
+  /** marca que el código de vinculación se mandó por WhatsApp desde el agente */
+  markPairingSent(via: string, at = Date.now()): void {
+    if (!this.pairing) return;
+    this.pairing = { ...this.pairing, sentAt: at, sentVia: via };
+    this.touch(true);
+  }
+
+  /**
+   * Agente (dueño con envío): manda el código de vinculación de OTRA sesión al número que
+   * se está vinculando. Única excepción a "solo chats existentes": el texto lo arma el
+   * servidor (no se puede usar para otra cosa) y pasa por los mismos frenos.
+   */
+  async sendLinkingCode(phone: string, text: string, now = Date.now()): Promise<void> {
+    this.requireOwner();
+    if (!this.canSend())
+      throw new HttpError(
+        403,
+        'send_disabled',
+        'El envío no está habilitado en tu agente (actívalo en los ajustes del asistente)',
+      );
+    const sock = this.sock;
+    if (!sock?.sendText || this.record.status !== 'connected')
+      throw new HttpError(409, 'not_connected', 'Tu agente de WhatsApp no está conectado ahora');
+    const key = `${phone}@s.whatsapp.net`;
+    const wait = this.sendLimiter.check(key, now);
+    if (wait) throw new HttpError(429, 'rate_limited', wait);
+    this.sendLimiter.record(key, now);
+    const sent = await this.deliver(key, () => sock.sendText!(key, text));
+    this.log.info({ chars: text.length }, 'código de vinculación enviado por el agente');
+    await this.storeSent(key, sent, { conversation: text }, now);
+  }
+
   // ------------------------------------------------------------ modo migración
 
   /** modo migración con lo que lleva guardado; null = apagado */

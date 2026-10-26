@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   Copy,
   KeyRound,
+  Send,
   MoreVertical,
   RefreshCw,
   ScanLine,
@@ -12,7 +13,8 @@ import {
 } from 'lucide-react';
 import type { SessionSummary } from '@wa-bridge/shared';
 import { useNow } from '../hooks/streams';
-import { Spinner } from './ui';
+import { fmtPhone } from '../lib/format';
+import { Dialog, Spinner } from './ui';
 
 interface Props {
   session: SessionSummary;
@@ -21,10 +23,22 @@ interface Props {
   onSimulateScan?: (() => void) | undefined;
   /** vincular con código: pide el código de 8 caracteres para ese número */
   onPairingCode?: ((phone: string) => Promise<void>) | undefined;
+  /** manda el código por WhatsApp desde el agente conectado */
+  onSendPairing?: (() => Promise<void>) | undefined;
+  /** nombre del agente que puede mandarlo; null = no hay agente con envío */
+  pairingSender?: string | null | undefined;
 }
 
 /** Pantalla de vinculación: QR con marca VentaPlay + instrucciones. */
-export function LinkView({ session, busy, onNewQr, onSimulateScan, onPairingCode }: Props) {
+export function LinkView({
+  session,
+  busy,
+  onNewQr,
+  onSimulateScan,
+  onPairingCode,
+  onSendPairing,
+  pairingSender,
+}: Props) {
   return (
     <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_420px]">
       <div className="card order-2 p-6 sm:p-8 lg:order-1">
@@ -65,9 +79,15 @@ export function LinkView({ session, busy, onNewQr, onSimulateScan, onPairingCode
 
       <div className="order-1 lg:order-2">
         <QrCard session={session} busy={busy} onNewQr={onNewQr} />
-        {onPairingCode && ['qr', 'qr_expired', 'starting'].includes(session.status) && (
-          <PairingBox session={session} onRequest={onPairingCode} />
-        )}
+        {onPairingCode &&
+          ['qr', 'qr_expired', 'starting', 'logged_out'].includes(session.status) && (
+            <PairingBox
+              session={session}
+              onRequest={onPairingCode}
+              onSend={onSendPairing}
+              sender={pairingSender ?? null}
+            />
+          )}
         {onSimulateScan && session.status === 'qr' && (
           <button
             className="btn-secondary mt-3 w-full border-dashed text-amber-800"
@@ -147,11 +167,15 @@ function QrCard({
                       <Spinner className="size-4" /> Conectando con WhatsApp…
                     </p>
                   </div>
-                ) : status === 'qr_expired' ? (
+                ) : status === 'qr_expired' || status === 'logged_out' ? (
                   <div className="flex flex-col items-center gap-3 text-center">
-                    <p className="font-black">El código expiró</p>
+                    <p className="font-black">
+                      {status === 'logged_out' ? 'Listo para vincular' : 'El código expiró'}
+                    </p>
                     <p className="text-sm text-ink-soft">
-                      WhatsApp los renueva unas veces y luego hay que pedir otro.
+                      {status === 'logged_out'
+                        ? 'Pide un código cuando la persona tenga el teléfono a mano.'
+                        : 'WhatsApp los renueva unas veces y luego hay que pedir otro.'}
                     </p>
                     <button className="btn-primary mt-1" onClick={onNewQr} disabled={busy}>
                       {busy ? <Spinner className="size-4" /> : <RefreshCw className="size-4" />}{' '}
@@ -222,10 +246,16 @@ function QrCard({
 function PairingBox({
   session,
   onRequest,
+  onSend,
+  sender,
 }: {
   session: SessionSummary;
   onRequest: (phone: string) => Promise<void>;
+  onSend?: (() => Promise<void>) | undefined;
+  sender: string | null;
 }) {
+  const [confirm, setConfirm] = useState(false);
+  const [sending, setSending] = useState(false);
   const [phone, setPhone] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -277,9 +307,21 @@ function PairingBox({
             </li>
             <li>Escribir el código. Vence en unos 2 minutos: si vence, pide otro.</li>
           </ol>
+          {p.sentAt && (
+            <p className="rounded-lg bg-green-50 px-3 py-2 text-sm font-bold text-green-800">
+              Enviado por WhatsApp a {fmtPhone(p.phone)}
+              {p.sentVia ? ` desde ${p.sentVia}` : ''}.
+            </p>
+          )}
           <div className="flex flex-wrap gap-2">
+            {onSend && sender && (
+              <button className="btn-primary" disabled={sending} onClick={() => setConfirm(true)}>
+                {sending ? <Spinner className="size-4" /> : <Send className="size-4" />}
+                {p.sentAt ? 'Reenviar por WhatsApp' : 'Enviar por WhatsApp'}
+              </button>
+            )}
             <button
-              className="btn-primary"
+              className={onSend && sender ? 'btn-secondary' : 'btn-primary'}
               onClick={() =>
                 void navigator.clipboard
                   .writeText(instructions)
@@ -325,6 +367,39 @@ function PairingBox({
         </form>
       )}
       {error && <p className="mt-2 text-xs font-bold text-danger">{error}</p>}
+      {p && onSend && (
+        <Dialog
+          open={confirm}
+          onClose={() => setConfirm(false)}
+          title="Enviar el código por WhatsApp"
+          footer={
+            <>
+              <button className="btn-secondary" onClick={() => setConfirm(false)} data-autofocus>
+                Cancelar
+              </button>
+              <button
+                className="btn-primary"
+                disabled={sending}
+                onClick={() => {
+                  setConfirm(false);
+                  setSending(true);
+                  setError(null);
+                  onSend()
+                    .catch((e: Error) => setError(e.message))
+                    .finally(() => setSending(false));
+                }}
+              >
+                <Send className="size-4" /> Enviar
+              </button>
+            </>
+          }
+        >
+          <p>
+            Se le manda a <b>{fmtPhone(p.phone)}</b> desde <b>{sender}</b> el código <b>{p.code}</b>{' '}
+            con los pasos para vincular.
+          </p>
+        </Dialog>
+      )}
     </div>
   );
 }

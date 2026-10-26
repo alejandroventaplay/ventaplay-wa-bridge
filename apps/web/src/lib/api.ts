@@ -179,6 +179,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ phone }),
     }).then((r) => r.session),
+  /** manda el código de vinculación por WhatsApp desde el agente conectado */
+  sendPairingCode: (id: string) =>
+    request<{ session: SessionSummary }>(`/sessions/${id}/pairing-code/send`, {
+      method: 'POST',
+    }).then((r) => r.session),
   /** activa o apaga el modo migración (guardar conversaciones para llevarlas a VentaPlay) */
   setMigration: (id: string, body: MigrationRequest) =>
     request<{ session: SessionSummary }>(`/sessions/${id}/migration`, {

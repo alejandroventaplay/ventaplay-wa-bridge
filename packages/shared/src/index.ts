@@ -173,6 +173,9 @@ export interface PairingCodeInfo {
   /** número (solo dígitos) del teléfono que se vincula */
   phone: string;
   requestedAt: number;
+  /** se le mandó por WhatsApp desde el agente (asistente con envío) */
+  sentAt?: number | null;
+  sentVia?: string | null;
 }
 
 // ------------------------------------------------------- migración a VentaPlay
