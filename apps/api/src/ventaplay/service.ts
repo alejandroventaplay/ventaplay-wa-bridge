@@ -2,6 +2,7 @@ import type { Logger } from 'pino';
 import type {
   VentaPlayCounts,
   VentaPlayOrg,
+  VentaPlaySaved,
   VentaPlayState,
   VentaPlayValidateRequest,
 } from '@wa-bridge/shared';
@@ -33,7 +34,36 @@ export interface MigrationSessionLike {
   directory(): Promise<Directory>;
   readonly isMigrating: boolean;
   migrationChats(): { jid: string; messages: StoredMessage[] }[];
+  /** token y registro, cifrados junto a las credenciales de la sesión */
+  readVentaPlay(key: string): Promise<string | null>;
+  writeVentaPlay(entries: Record<string, string | null>): Promise<void>;
 }
+
+/** claves en el almacén cifrado de la sesión */
+export const LINK_KEY = 'ventaplay:link';
+export const SENT_KEY = (org: string) => `ventaplay:sent:${org}`;
+/** cada cuántos lotes se guarda el registro de lo enviado (y siempre al terminar o cortarse) */
+const SAVE_EVERY = 5;
+
+/** org conectada: el token queda guardado para "Actualizar" sin pegarlo de nuevo */
+interface Link {
+  token: string;
+  phoneNumberId: string | null;
+  org: VentaPlayOrg;
+  savedAt: number;
+}
+
+/** registro de lo que VentaPlay ya aceptó para una org (external_id sin el prefijo común) */
+interface Registry {
+  org: string;
+  prefix: string;
+  clients: Set<string>;
+  messages: Set<string>;
+  lastSyncAt: number | null;
+  dirty: boolean;
+}
+
+const orgKey = (org: VentaPlayOrg) => org.id ?? org.subdominio ?? org.nombre;
 
 export interface VentaPlayDeps {
   getSession: (id: string) => MigrationSessionLike;
@@ -72,6 +102,9 @@ class VpError extends Error {
 
 interface Job {
   token: string;
+  /** registro de la org (se completa con lo que VentaPlay acepta) */
+  registry: Registry | null;
+  batchesSinceSave: number;
   state: VentaPlayState;
   items: MigrationItems;
   /** estado que anticipó la prueba en seco, por external_id */
@@ -100,6 +133,7 @@ const idle = (): VentaPlayState => ({
   error: null,
   pausedReason: null,
   canResume: false,
+  saved: null,
   validatedAt: null,
   startedAt: null,
   finishedAt: null,
@@ -109,10 +143,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * "Directo a VentaPlay": valida la API key de la org, hace una prueba en seco y después
- * importa clientes y mensajes por lotes. El token vive solo en memoria y nunca se loguea.
+ * importa clientes y mensajes por lotes. El token se guarda cifrado junto a la sesión
+ * (para "Actualizar" con un clic) y nunca se loguea. Un registro de lo que VentaPlay ya
+ * aceptó permite mandar después solo lo nuevo.
  */
 export class VentaPlayService {
   private jobs = new Map<string, Job>();
+  private links = new Map<string, Link | null>();
+  private registries = new Map<string, Registry>();
   private readonly fetchFn: typeof fetch;
   private readonly baseUrl: string;
   private readonly retryDelayMs: number;
@@ -123,40 +161,98 @@ export class VentaPlayService {
     this.retryDelayMs = deps.retryDelayMs ?? 4000;
   }
 
-  state(id: string): VentaPlayState {
+  async state(id: string): Promise<VentaPlayState> {
     const job = this.jobs.get(id);
-    if (!job) return idle();
-    const st = structuredClone(job.state);
-    st.canResume =
-      !job.running &&
-      !job.blocked &&
-      Boolean(st.plan) &&
-      (st.phase === 'validated' || st.phase === 'paused' || st.phase === 'error');
+    const st = job ? structuredClone(job.state) : idle();
+    if (job)
+      st.canResume =
+        !job.running &&
+        !job.blocked &&
+        Boolean(st.plan?.filas) &&
+        (st.phase === 'validated' || st.phase === 'paused' || st.phase === 'error');
+    st.saved = await this.savedInfo(id);
     return st;
   }
 
-  /** olvida el token y el estado de la importación */
-  forget(id: string): VentaPlayState {
+  /**
+   * Cierra la importación mostrada. Con `token: true` además borra el token guardado
+   * (el registro de lo enviado se conserva: sirve si después se conecta de nuevo).
+   */
+  async forget(id: string, opts: { token?: boolean } = {}): Promise<VentaPlayState> {
     const job = this.jobs.get(id);
     if (job?.running) throw new HttpError(409, 'importing', 'Hay una importación en curso');
     this.jobs.delete(id);
-    return idle();
+    if (opts.token) {
+      await this.deps.getSession(id).writeVentaPlay({ [LINK_KEY]: null });
+      this.links.set(id, null);
+      this.deps.logger.info({ session: id }, 'VentaPlay: token olvidado');
+    }
+    return this.state(id);
+  }
+
+  /**
+   * Marca como ya enviado lo importado antes de existir el registro: clientes cuyo primer
+   * mensaje es anterior a `until` (o sin mensajes) y sus mensajes hasta `until`.
+   */
+  async seed(
+    id: string,
+    org: string,
+    until: number,
+  ): Promise<{ clientes: number; mensajes: number }> {
+    const session = this.deps.getSession(id);
+    const summary = session.summary();
+    const sessionPhone = (summary.profile?.phone ?? '').replace(/\D/g, '');
+    if (!sessionPhone || !session.isMigrating)
+      throw new HttpError(409, 'not_ready', 'La sesión no está vinculada en modo migración');
+    const items = buildItems(
+      {
+        sessionPhone,
+        sessionName: summary.profile?.name ?? summary.label,
+        directory: await session.directory(),
+        chats: session.migrationChats(),
+      },
+      null,
+    );
+    const reg = await this.registry(id, org, sessionPhone);
+    let clientes = 0;
+    let mensajes = 0;
+    const ok = new Set<string>();
+    for (const c of items.clients)
+      if (!c.created_at || Date.parse(c.created_at) <= until) {
+        ok.add(c.external_id);
+        if (this.mark(reg, 'clients', c.external_id)) clientes += 1;
+      }
+    for (const m of items.messages)
+      if (ok.has(m.cliente_external_id) && Date.parse(m.created_at) <= until)
+        if (this.mark(reg, 'messages', m.external_id)) mensajes += 1;
+    reg.lastSyncAt ??= until;
+    await this.saveRegistry(id, reg);
+    this.deps.logger.info({ session: id, clientes, mensajes }, 'VentaPlay: registro inicial');
+    return { clientes, mensajes };
   }
 
   async validate(id: string, req: VentaPlayValidateRequest): Promise<VentaPlayState> {
     const prev = this.jobs.get(id);
     if (prev?.running) throw new HttpError(409, 'importing', 'Hay una importación en curso');
-    const token = req.token.trim();
     const session = this.deps.getSession(id);
     const summary = session.summary();
     const sessionPhone = (summary.profile?.phone ?? '').replace(/\D/g, '');
     if (!sessionPhone)
       throw new HttpError(409, 'not_linked', 'Primero vincula el WhatsApp: no sé de qué número es');
+    const saved = await this.link(id);
+    const typed = req.token?.trim() || null;
+    const token = typed ?? saved?.token ?? null;
+    if (!token) throw new HttpError(400, 'no_token', 'Pega la API key de la organización');
+    // el phone_number_id guardado vale solo si se usa el token guardado
+    const phoneNumberId =
+      req.phoneNumberId?.trim() || (typed ? null : (saved?.phoneNumberId ?? null)) || null;
 
     const state = idle();
     state.phase = 'validating';
     const job: Job = {
       token,
+      registry: null,
+      batchesSinceSave: 0,
       state,
       items: {
         clients: [],
@@ -176,7 +272,13 @@ export class VentaPlayService {
     this.jobs.set(id, job);
     try {
       const org = await this.organization(token);
-      const phoneNumberId = req.phoneNumberId?.trim() || null;
+      // la key es válida: queda guardada (cifrada) para "Actualizar"
+      const link: Link = { token, phoneNumberId, org, savedAt: Date.now() };
+      await session.writeVentaPlay({ [LINK_KEY]: JSON.stringify(link) });
+      this.links.set(id, link);
+      const reg = await this.registry(id, orgKey(org), sessionPhone);
+      job.registry = reg;
+      const mode = req.mode ?? (reg.clients.size || reg.messages.size ? 'actualizar' : 'completo');
       const chats = session.isMigrating ? session.migrationChats() : null;
       job.items = buildItems(
         {
@@ -187,6 +289,17 @@ export class VentaPlayService {
         },
         phoneNumberId,
       );
+      if (mode === 'actualizar') {
+        // solo lo que VentaPlay no ha aceptado antes; los clientes ya enviados sirven
+        // para que entren sus mensajes nuevos
+        job.items.clients = job.items.clients.filter(
+          (c) => !reg.clients.has(this.short(reg, c.external_id)),
+        );
+        job.items.messages = job.items.messages.filter(
+          (m) => !reg.messages.has(this.short(reg, m.external_id)),
+        );
+        for (const c of reg.clients) job.okClients.add(reg.prefix + c);
+      }
       state.org = org;
       state.phoneNumberId = phoneNumberId;
       state.importId = importIdFor(sessionPhone);
@@ -219,13 +332,16 @@ export class VentaPlayService {
         soloContactos: chats === null,
         historialCompleto: summary.stats.state === 'complete',
         filas: job.items.clients.length + job.items.messages.length,
+        modo: mode,
+        yaEnviados: { clientes: reg.clients.size, mensajes: reg.messages.size },
       };
       state.progress = {
         clientes: { done: 0, total: job.items.clients.length },
         mensajes: { done: 0, total: job.items.messages.length },
       };
-      state.phase = 'validated';
+      state.phase = state.plan.filas ? 'validated' : 'done';
       state.validatedAt = Date.now();
+      if (!state.plan.filas) state.finishedAt = state.validatedAt;
       this.deps.logger.info(
         { session: id, org: org.subdominio, plan: state.plan },
         'VentaPlay: validado (prueba en seco)',
@@ -241,8 +357,110 @@ export class VentaPlayService {
     return this.state(id);
   }
 
+  // ------------------------------------------------------------ token y registro
+
+  private async link(id: string): Promise<Link | null> {
+    if (this.links.has(id)) return this.links.get(id) ?? null;
+    let link: Link | null;
+    try {
+      const raw = await this.deps.getSession(id).readVentaPlay(LINK_KEY);
+      link = raw ? (JSON.parse(raw) as Link) : null;
+    } catch {
+      link = null;
+    }
+    this.links.set(id, link);
+    return link;
+  }
+
+  private async registry(id: string, org: string, sessionPhone: string): Promise<Registry> {
+    const key = `${id}|${org}`;
+    const cached = this.registries.get(key);
+    if (cached) return cached;
+    const prefix = `wabridge:${sessionPhone}:`;
+    const reg: Registry = {
+      org,
+      prefix,
+      clients: new Set(),
+      messages: new Set(),
+      lastSyncAt: null,
+      dirty: false,
+    };
+    try {
+      const raw = await this.deps.getSession(id).readVentaPlay(SENT_KEY(org));
+      if (raw) {
+        const d = JSON.parse(raw) as {
+          prefix?: string;
+          clients?: string[];
+          messages?: string[];
+          lastSyncAt?: number | null;
+        };
+        if (d.prefix === prefix) {
+          for (const c of d.clients ?? []) reg.clients.add(c);
+          for (const m of d.messages ?? []) reg.messages.add(m);
+          reg.lastSyncAt = d.lastSyncAt ?? null;
+        }
+      }
+    } catch {
+      /* registro dañado: se parte de cero (repetir no duplica en VentaPlay) */
+    }
+    this.registries.set(key, reg);
+    return reg;
+  }
+
+  private short(reg: Registry, externalId: string): string {
+    return externalId.startsWith(reg.prefix) ? externalId.slice(reg.prefix.length) : externalId;
+  }
+
+  private mark(reg: Registry, kind: 'clients' | 'messages', externalId: string): boolean {
+    const k = this.short(reg, externalId);
+    if (reg[kind].has(k)) return false;
+    reg[kind].add(k);
+    reg.dirty = true;
+    return true;
+  }
+
+  private async saveRegistry(id: string, reg: Registry): Promise<void> {
+    if (!reg.dirty) return;
+    reg.dirty = false;
+    try {
+      await this.deps.getSession(id).writeVentaPlay({
+        [SENT_KEY(reg.org)]: JSON.stringify({
+          prefix: reg.prefix,
+          clients: [...reg.clients],
+          messages: [...reg.messages],
+          lastSyncAt: reg.lastSyncAt,
+        }),
+      });
+    } catch (err) {
+      reg.dirty = true;
+      this.deps.logger.warn(
+        { session: id, err: (err as Error).message },
+        'VentaPlay: no se guardó el registro',
+      );
+    }
+  }
+
+  private async savedInfo(id: string): Promise<VentaPlaySaved | null> {
+    let link: Link | null;
+    try {
+      link = await this.link(id);
+    } catch {
+      return null;
+    }
+    if (!link) return null;
+    const phone = (this.deps.getSession(id).summary().profile?.phone ?? '').replace(/\D/g, '');
+    const reg = phone ? await this.registry(id, orgKey(link.org), phone) : null;
+    return {
+      org: link.org,
+      phoneNumberId: link.phoneNumberId,
+      savedAt: link.savedAt,
+      enviados: { clientes: reg?.clients.size ?? 0, mensajes: reg?.messages.size ?? 0 },
+      lastSyncAt: reg?.lastSyncAt ?? null,
+    };
+  }
+
   /** arranca (o retoma) la importación en segundo plano */
-  start(id: string): VentaPlayState {
+  async start(id: string): Promise<VentaPlayState> {
     const job = this.jobs.get(id);
     if (!job || !job.state.plan || !job.state.importId)
       throw new HttpError(409, 'not_validated', 'Primero valida el token de la organización');
@@ -287,8 +505,12 @@ export class VentaPlayService {
         let res = await this.importBatch(token, 'import-clients', importId, false, batch);
         res = await this.retryValoresEspeciales(token, importId, batch, res);
         const failed = this.tally(state.result.clientes, state, res, (r) => {
-          if (r.external_id && r.status !== 'error') job.okClients.add(r.external_id);
+          if (r.external_id && r.status !== 'error') {
+            job.okClients.add(r.external_id);
+            if (job.registry) this.mark(job.registry, 'clients', r.external_id);
+          }
         });
+        await this.maybeSave(id, job);
         job.cursor.clients += batch.length;
         state.progress.clientes.done = job.cursor.clients;
         if (canary && failed) {
@@ -322,7 +544,11 @@ export class VentaPlayService {
         let failed = 0;
         if (batch.length) {
           const res = await this.importBatch(token, 'import-messages', importId, false, batch);
-          failed = this.tally(state.result.mensajes, state, res);
+          failed = this.tally(state.result.mensajes, state, res, (r) => {
+            if (r.external_id && r.status !== 'error' && job.registry)
+              this.mark(job.registry, 'messages', r.external_id);
+          });
+          await this.maybeSave(id, job);
         }
         state.result.mensajes.skipped += skipped;
         job.cursor.messages = next;
@@ -341,6 +567,10 @@ export class VentaPlayService {
       state.step = null;
       state.phase = 'done';
       state.finishedAt = Date.now();
+      if (job.registry) {
+        job.registry.lastSyncAt = state.finishedAt;
+        job.registry.dirty = true;
+      }
       this.deps.logger.info(
         { session: id, importId, clientes: state.result.clientes, mensajes: state.result.mensajes },
         'VentaPlay: importación terminada',
@@ -359,6 +589,19 @@ export class VentaPlayService {
         { session: id, importId, code: e.code, step: state.step },
         'VentaPlay: importación detenida',
       );
+    } finally {
+      // se libera antes de guardar: "Retomar" no debe esperar a que termine de escribir
+      job.running = false;
+      // lo aceptado queda registrado aunque se corte: al retomar o actualizar no se repite
+      if (job.registry) await this.saveRegistry(id, job.registry);
+    }
+  }
+
+  private async maybeSave(id: string, job: Job): Promise<void> {
+    job.batchesSinceSave += 1;
+    if (job.registry && job.batchesSinceSave >= SAVE_EVERY) {
+      job.batchesSinceSave = 0;
+      await this.saveRegistry(id, job.registry);
     }
   }
 

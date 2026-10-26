@@ -245,6 +245,10 @@ export interface VentaPlayPlan {
   historialCompleto: boolean;
   /** filas que ocupa del cupo diario de VentaPlay */
   filas: number;
+  /** completo = todo; actualizar = solo lo que no se ha enviado antes a esta org */
+  modo: 'completo' | 'actualizar';
+  /** lo que ya estaba enviado a esta org (registro) */
+  yaEnviados: { clientes: number; mensajes: number };
 }
 
 export interface VentaPlayState {
@@ -269,13 +273,27 @@ export interface VentaPlayState {
   pausedReason: string | null;
   /** se puede importar o retomar (false si fallaron los 5 de prueba: validar de nuevo) */
   canResume: boolean;
+  /** org conectada (token guardado cifrado en el equipo) y lo ya enviado; null = no hay */
+  saved: VentaPlaySaved | null;
   validatedAt: number | null;
   startedAt: number | null;
   finishedAt: number | null;
 }
 
+export interface VentaPlaySaved {
+  org: VentaPlayOrg;
+  phoneNumberId: string | null;
+  savedAt: number;
+  enviados: { clientes: number; mensajes: number };
+  /** última importación o actualización terminada */
+  lastSyncAt: number | null;
+}
+
 export interface VentaPlayValidateRequest {
-  token: string;
+  /** vacío = usar el token guardado */
+  token?: string | null;
+  /** por defecto: actualizar si ya hay algo enviado a esa org, si no completo */
+  mode?: 'completo' | 'actualizar';
   /** phone_number_id del WhatsApp de la org al que se asocia el historial */
   phoneNumberId?: string | null;
 }

@@ -99,8 +99,19 @@ const MigrationBody = z.object({
   consentBy: z.string().trim().max(120).nullish(),
   relink: z.boolean().optional(),
 });
+const ForgetBody = z.object({ token: z.boolean().optional() });
+const SeedBody = z.object({
+  org: z.string().trim().min(3).max(80),
+  until: z.number().int().positive(),
+});
 const VentaPlayBody = z.object({
-  token: z.string().trim().min(16, 'Pega la API key completa de la organización').max(500),
+  token: z
+    .string()
+    .trim()
+    .max(500)
+    .refine((t) => t === '' || t.length >= 16, 'Pega la API key completa de la organización')
+    .nullish(),
+  mode: z.enum(['completo', 'actualizar']).optional(),
   phoneNumberId: z
     .string()
     .trim()
@@ -503,7 +514,7 @@ export async function buildServer(deps: ServerDeps) {
     api.get('/sessions/:id/ventaplay', async (req) => {
       const { id } = IdParams.parse(req.params);
       manager.get(id);
-      return { state: ventaplay.state(id) };
+      return { state: await ventaplay.state(id) };
     });
 
     /** valida la API key de la org y hace la prueba en seco (no escribe nada) */
@@ -524,13 +535,25 @@ export async function buildServer(deps: ServerDeps) {
         { session: id, by: req.principal?.email ?? req.principal?.sub },
         'VentaPlay: importar',
       );
-      return { state: ventaplay.start(id) };
+      return { state: await ventaplay.start(id) };
     });
 
-    /** olvida el token y el estado */
+    /** cierra la importación mostrada; con { token: true } además olvida el token guardado */
     api.post('/sessions/:id/ventaplay/forget', async (req) => {
       const { id } = IdParams.parse(req.params);
-      return { state: ventaplay.forget(id) };
+      const { token } = ForgetBody.parse(req.body ?? {});
+      return { state: await ventaplay.forget(id, { token }) };
+    });
+
+    /**
+     * Marca como ya enviado lo que se importó antes de existir el registro (hasta `until`),
+     * para que "Actualizar" mande solo lo nuevo. Uso puntual, no aparece en la web.
+     */
+    api.post('/sessions/:id/ventaplay/registry/seed', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      const { org, until } = SeedBody.parse(req.body ?? {});
+      req.log.info({ session: id, until }, 'VentaPlay: registro inicial pedido');
+      return { marcados: await ventaplay.seed(id, org, until) };
     });
 
     // ---------------------------------------------- descargables para compartir

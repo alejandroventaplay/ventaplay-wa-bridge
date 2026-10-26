@@ -480,6 +480,21 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     this.touch(true);
   }
 
+  /**
+   * Datos de "Directo a VentaPlay" (token de la org y registro de lo ya enviado). Van
+   * cifrados junto a las credenciales: se borran al desvincular.
+   */
+  async readVentaPlay(key: string): Promise<string | null> {
+    if (!key.startsWith('ventaplay:')) throw new Error('clave fuera de ventaplay:');
+    return (await this.deps.store.readAuth(this.id, [key])).get(key) ?? null;
+  }
+
+  async writeVentaPlay(entries: Record<string, string | null>): Promise<void> {
+    if (Object.keys(entries).some((k) => !k.startsWith('ventaplay:')))
+      throw new Error('clave fuera de ventaplay:');
+    await this.deps.store.writeAuth(this.id, entries);
+  }
+
   /** conversaciones guardadas para migrar, unidas por contacto (LID y número = el mismo chat) */
   migrationChats(): { jid: string; messages: StoredMessage[] }[] {
     const out = new Map<string, StoredMessage[]>();

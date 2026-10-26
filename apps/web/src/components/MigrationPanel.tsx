@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import type { SessionSummary, VentaPlayState } from '@wa-bridge/shared';
 import { api } from '../lib/api';
-import { fmtNumber } from '../lib/format';
+import { fmtDateTime, fmtNumber } from '../lib/format';
 import { Dialog, Spinner } from './ui';
 
 // ------------------------------------------------------------ activar el modo
@@ -303,7 +303,10 @@ export function VentaPlayExporter({ session }: { session: SessionSummary }) {
   }
 
   const plan = state?.plan;
-  const showForm = phase === 'idle' || (phase === 'error' && !plan);
+  const saved = state?.saved ?? null;
+  const idleLike = phase === 'idle' || (phase === 'error' && !plan);
+  const showForm = idleLike && !saved;
+  const update = plan?.modo === 'actualizar';
 
   return (
     <li className="flex flex-col gap-4 py-4 sm:flex-row sm:items-start">
@@ -318,6 +321,40 @@ export function VentaPlayExporter({ session }: { session: SessionSummary }) {
             sin pasar por un archivo. Validar no escribe nada.
           </p>
         </div>
+
+        {idleLike && saved && (
+          <div className="space-y-3 rounded-xl border border-line bg-slate-50/60 p-4 text-sm">
+            <p className="font-bold text-ink">
+              <CircleCheck className="mr-1 inline size-4 text-green-700" />
+              Conectado a {saved.org.nombre}
+              {saved.org.subdominio ? ` (${saved.org.subdominio})` : ''}
+              {saved.phoneNumberId ? ` · WhatsApp ${saved.phoneNumberId}` : ''}
+            </p>
+            <p className="text-ink-soft">
+              Ya enviados: <b className="text-ink">{fmtNumber(saved.enviados.clientes)}</b> clientes
+              y <b className="text-ink">{fmtNumber(saved.enviados.mensajes)}</b> mensajes
+              {saved.lastSyncAt ? ` (última vez: ${fmtDateTime(saved.lastSyncAt)})` : ''}.
+              “Actualizar” manda solo lo nuevo.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                className="btn-primary"
+                disabled={!linked || busy}
+                onClick={() => void act(() => api.ventaplayValidate(session.id, {}))}
+              >
+                {busy ? <Spinner className="size-4" /> : <RefreshCw className="size-4" />}{' '}
+                Actualizar
+              </button>
+              <button
+                className="btn-secondary"
+                disabled={busy}
+                onClick={() => void act(() => api.ventaplayForget(session.id, true))}
+              >
+                <Lock className="size-4" /> Olvidar token
+              </button>
+            </div>
+          </div>
+        )}
 
         {showForm && (
           <form
@@ -366,7 +403,19 @@ export function VentaPlayExporter({ session }: { session: SessionSummary }) {
               {state.org?.subdominio ? ` (${state.org.subdominio})` : ''}
               {state.phoneNumberId ? ` · WhatsApp ${state.phoneNumberId}` : ''}
             </p>
-            <ul className="space-y-1 text-ink-soft">
+            {update && (
+              <p className="text-ink-soft">
+                <b className="text-ink">Actualizar:</b> solo lo que no se ha enviado antes (ya
+                enviados: {fmtNumber(plan.yaEnviados.clientes)} clientes y{' '}
+                {fmtNumber(plan.yaEnviados.mensajes)} mensajes).
+              </p>
+            )}
+            {!plan.filas && (
+              <p className="flex items-center gap-2 font-bold text-green-700">
+                <CircleCheck className="size-4" /> Todo al día: no hay nada nuevo para enviar.
+              </p>
+            )}
+            <ul className={`space-y-1 text-ink-soft ${plan.filas ? '' : 'hidden'}`}>
               <li>
                 <b className="text-ink">{fmtNumber(plan.clientes)} clientes</b>:{' '}
                 {fmtNumber(plan.nuevos)} nuevos y {fmtNumber(plan.existentes)} que ya existen (se
@@ -404,25 +453,26 @@ export function VentaPlayExporter({ session }: { session: SessionSummary }) {
               </p>
             )}
 
-            {(phase === 'importing' ||
-              phase === 'paused' ||
-              phase === 'done' ||
-              state.startedAt) && (
-              <div className="space-y-2">
-                <Bar
-                  label="Clientes"
-                  done={state.progress.clientes.done}
-                  total={state.progress.clientes.total}
-                />
-                {!plan.soloContactos && (
+            {plan.filas > 0 &&
+              (phase === 'importing' ||
+                phase === 'paused' ||
+                phase === 'done' ||
+                state.startedAt) && (
+                <div className="space-y-2">
                   <Bar
-                    label="Mensajes"
-                    done={state.progress.mensajes.done}
-                    total={state.progress.mensajes.total}
+                    label="Clientes"
+                    done={state.progress.clientes.done}
+                    total={state.progress.clientes.total}
                   />
-                )}
-              </div>
-            )}
+                  {!plan.soloContactos && (
+                    <Bar
+                      label="Mensajes"
+                      done={state.progress.mensajes.done}
+                      total={state.progress.mensajes.total}
+                    />
+                  )}
+                </div>
+              )}
 
             {state.startedAt && (
               <p className="text-xs text-ink-soft">
@@ -456,9 +506,10 @@ export function VentaPlayExporter({ session }: { session: SessionSummary }) {
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" /> {state.error}
               </p>
             )}
-            {phase === 'done' && (
+            {phase === 'done' && plan.filas > 0 && (
               <p className="flex items-center gap-2 font-bold text-green-700">
-                <CircleCheck className="size-4" /> Importación terminada.
+                <CircleCheck className="size-4" />{' '}
+                {update ? 'Actualización terminada.' : 'Importación terminada.'}
               </p>
             )}
 
@@ -470,7 +521,11 @@ export function VentaPlayExporter({ session }: { session: SessionSummary }) {
                   ) : (
                     <RefreshCw className="size-4" />
                   )}
-                  {phase === 'validated' ? 'Importar a VentaPlay' : 'Retomar'}
+                  {phase !== 'validated'
+                    ? 'Retomar'
+                    : update
+                      ? 'Actualizar VentaPlay'
+                      : 'Importar a VentaPlay'}
                 </button>
               )}
               {phase === 'importing' && (
@@ -491,7 +546,7 @@ export function VentaPlayExporter({ session }: { session: SessionSummary }) {
                   disabled={busy}
                   onClick={() => void act(() => api.ventaplayForget(session.id))}
                 >
-                  <Lock className="size-4" /> {phase === 'done' ? 'Cerrar' : 'Cambiar token'}
+                  <Lock className="size-4" /> {phase === 'done' ? 'Cerrar' : 'Cancelar'}
                 </button>
               )}
             </div>

@@ -272,7 +272,12 @@ describe('Directo a VentaPlay', () => {
       if (phases.includes(st.phase)) return st;
       await new Promise((res) => setTimeout(res, 20));
     }
-    throw new Error('timeout esperando la importación');
+    throw new Error(
+      'timeout esperando la importación: ' +
+        JSON.stringify(
+          (await s.app.inject({ url: `/sessions/${s.id}/ventaplay`, headers: auth })).json(),
+        ).slice(0, 600),
+    );
   };
 
   it('valida, prueba en seco e importa clientes y mensajes; el token no queda en el log', async () => {
@@ -526,7 +531,12 @@ describe('Directo a VentaPlay: casos borde', () => {
       if (phases.includes(st.phase)) return st;
       await new Promise((res) => setTimeout(res, 20));
     }
-    throw new Error('timeout esperando la importación');
+    throw new Error(
+      'timeout esperando la importación: ' +
+        JSON.stringify(
+          (await s.app.inject({ url: `/sessions/${s.id}/ventaplay`, headers: auth })).json(),
+        ).slice(0, 600),
+    );
   };
 
   it('si fallan los 5 de prueba se detiene y no deja retomar sin validar de nuevo', async () => {
@@ -612,5 +622,111 @@ describe('Directo a VentaPlay: casos borde', () => {
     });
     expect(r.statusCode).toBe(409);
     expect((r.json() as { error: string }).error).toBe('no_code');
+  });
+});
+
+describe('Actualizar: token guardado y registro de lo enviado', () => {
+  const poll = async (s: Awaited<ReturnType<typeof setup>>, phases: VentaPlayState['phase'][]) => {
+    for (let i = 0; i < 500; i++) {
+      const r = await s.app.inject({ url: `/sessions/${s.id}/ventaplay`, headers: auth });
+      const st = (r.json() as { state: VentaPlayState }).state;
+      if (phases.includes(st.phase)) return st;
+      await new Promise((res) => setTimeout(res, 20));
+    }
+    throw new Error(
+      'timeout esperando la importación: ' +
+        JSON.stringify(
+          (await s.app.inject({ url: `/sessions/${s.id}/ventaplay`, headers: auth })).json(),
+        ).slice(0, 600),
+    );
+  };
+  const validate = async (s: Awaited<ReturnType<typeof setup>>, payload: object) =>
+    (
+      (
+        await s.app.inject({
+          method: 'POST',
+          url: `/sessions/${s.id}/ventaplay/validate`,
+          headers: auth,
+          payload,
+        })
+      ).json() as { state: VentaPlayState }
+    ).state;
+
+  it('después de importar, "Actualizar" sin pegar el token no manda nada si no hay nuevo', async () => {
+    const s = await setup();
+    await linkWithMigration(s);
+    const first = await validate(s, { token: ORG_KEY, phoneNumberId: '123' });
+    expect(first.plan!.modo).toBe('completo');
+    await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/import`,
+      headers: auth,
+    });
+    const end = await poll(s, ['done', 'error']);
+    expect(end.phase).toBe('done');
+    expect(end.saved?.enviados).toEqual({
+      clientes: first.plan!.clientes,
+      mensajes: first.plan!.mensajes,
+    });
+    // cerrar no borra el token
+    await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/forget`,
+      headers: auth,
+      payload: {},
+    });
+    const calls = s.vp.calls.length;
+    const upd = await validate(s, {});
+    expect(upd.plan!.modo).toBe('actualizar');
+    expect(upd.plan!.filas).toBe(0);
+    expect(upd.phase).toBe('done');
+    expect(upd.phoneNumberId).toBe('123');
+    // solo se consultó la org: no hubo prueba en seco ni importación
+    expect(s.vp.calls.slice(calls).map((c) => c.endpoint)).toEqual(['get-organizations']);
+    expect(s.vp.calls.at(-1)!.auth).toBe(`Bearer ${ORG_KEY}`);
+  });
+
+  it('el token y el registro sobreviven a un reinicio; "Olvidar token" lo borra', async () => {
+    const s = await setup();
+    await linkWithMigration(s);
+    await validate(s, { token: ORG_KEY });
+    await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/import`,
+      headers: auth,
+    });
+    await poll(s, ['done', 'error']);
+    // un servicio nuevo (como tras reiniciar la API) lee lo guardado
+    const again = new VentaPlayService({
+      getSession: (id) => s.manager.get(id),
+      logger: pino({ level: 'silent' }),
+      fetch: s.vp.fetchFn,
+      retryDelayMs: 0,
+    });
+    const st = await again.validate(s.id, {});
+    expect(st.plan!.modo).toBe('actualizar');
+    expect(st.plan!.filas).toBe(0);
+    expect(st.saved!.enviados.mensajes).toBeGreaterThan(0);
+    const off = await again.forget(s.id, { token: true });
+    expect(off.saved).toBeNull();
+    await expect(again.validate(s.id, {})).rejects.toThrow(/API key/);
+  });
+
+  it('el registro inicial marca lo importado antes y "Actualizar" no lo repite', async () => {
+    const s = await setup();
+    await linkWithMigration(s);
+    const r = await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/registry/seed`,
+      headers: auth,
+      payload: { org: 'org-1', until: Date.now() + 365 * 864e5 },
+    });
+    expect(r.statusCode).toBe(200);
+    const marked = (r.json() as { marcados: { clientes: number; mensajes: number } }).marcados;
+    expect(marked.mensajes).toBeGreaterThan(0);
+    const st = await validate(s, { token: ORG_KEY });
+    expect(st.plan!.modo).toBe('actualizar');
+    expect(st.plan!.filas).toBe(0);
+    expect(st.plan!.yaEnviados.mensajes).toBe(marked.mensajes);
   });
 });

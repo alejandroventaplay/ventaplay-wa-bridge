@@ -203,9 +203,11 @@ export const api = {
     request<{ state: VentaPlayState }>(`/sessions/${id}/ventaplay/import`, {
       method: 'POST',
     }).then((r) => r.state),
-  ventaplayForget: (id: string) =>
+  /** cierra la importación mostrada; con token = true además olvida el token guardado */
+  ventaplayForget: (id: string, token = false) =>
     request<{ state: VentaPlayState }>(`/sessions/${id}/ventaplay/forget`, {
       method: 'POST',
+      body: JSON.stringify({ token }),
     }).then((r) => r.state),
   /** activa, ajusta o desactiva el modo asistente */
   setAssistant: (id: string, body: AssistantRequest) =>
