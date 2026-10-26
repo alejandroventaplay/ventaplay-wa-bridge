@@ -28,6 +28,7 @@ export interface MigrationSessionLike {
   summary(): {
     profile: { phone?: string | null; name?: string | null } | null;
     label: string | null;
+    stats: { state: string };
   };
   directory(): Promise<Directory>;
   readonly isMigrating: boolean;
@@ -79,6 +80,8 @@ interface Job {
   okClients: Set<string>;
   cursor: { clients: number; messages: number };
   running: boolean;
+  /** fallaron los 5 de prueba: no se puede retomar, hay que revisar y validar de nuevo */
+  blocked: boolean;
 }
 
 const zero = (): VentaPlayCounts => ({ created: 0, updated: 0, skipped: 0, errors: 0 });
@@ -94,6 +97,7 @@ const idle = (): VentaPlayState => ({
   result: { clientes: zero(), mensajes: zero(), codes: [] },
   error: null,
   pausedReason: null,
+  canResume: false,
   validatedAt: null,
   startedAt: null,
   finishedAt: null,
@@ -118,7 +122,15 @@ export class VentaPlayService {
   }
 
   state(id: string): VentaPlayState {
-    return structuredClone(this.jobs.get(id)?.state ?? idle());
+    const job = this.jobs.get(id);
+    if (!job) return idle();
+    const st = structuredClone(job.state);
+    st.canResume =
+      !job.running &&
+      !job.blocked &&
+      Boolean(st.plan) &&
+      (st.phase === 'validated' || st.phase === 'paused' || st.phase === 'error');
+    return st;
   }
 
   /** olvida el token y el estado de la importación */
@@ -156,6 +168,7 @@ export class VentaPlayService {
       okClients: new Set(),
       cursor: { clients: 0, messages: 0 },
       running: false,
+      blocked: false,
     };
     this.jobs.set(id, job);
     try {
@@ -201,6 +214,7 @@ export class VentaPlayService {
         chatsConMensajes: job.items.chatsConMensajes,
         mensajesFuera: job.items.mensajesFuera,
         soloContactos: chats === null,
+        historialCompleto: summary.stats.state === 'complete',
         filas: job.items.clients.length + job.items.messages.length,
       };
       state.progress = {
@@ -231,6 +245,12 @@ export class VentaPlayService {
       throw new HttpError(409, 'not_validated', 'Primero valida el token de la organización');
     if (job.running) return this.state(id);
     if (job.state.phase === 'done') return this.state(id);
+    if (job.blocked)
+      throw new HttpError(
+        409,
+        'canary_failed',
+        'Fallaron los clientes de prueba: revisa los errores y vuelve a validar',
+      );
     job.running = true;
     job.state.phase = 'importing';
     job.state.error = null;
@@ -269,6 +289,7 @@ export class VentaPlayService {
         job.cursor.clients += batch.length;
         state.progress.clientes.done = job.cursor.clients;
         if (canary && failed) {
+          job.blocked = true;
           state.phase = 'error';
           state.error =
             'Fallaron clientes de prueba: no se cargó el resto. Revisa los errores antes de seguir.';
@@ -279,20 +300,24 @@ export class VentaPlayService {
       state.step = 'mensajes';
       const msgs = items.messages;
       while (job.cursor.messages < msgs.length) {
+        // el cursor avanza recién cuando VentaPlay aceptó el lote: si se corta o se
+        // agota el cupo, al retomar se vuelve a mandar el mismo lote (no se pierde nada)
         const batch: MessageItem[] = [];
         let skipped = 0;
-        while (job.cursor.messages < msgs.length && batch.length < BATCH) {
-          const m = msgs[job.cursor.messages]!;
-          job.cursor.messages += 1;
+        let next = job.cursor.messages;
+        while (next < msgs.length && batch.length < BATCH) {
+          const m = msgs[next]!;
+          next += 1;
           if (job.okClients.has(m.cliente_external_id)) batch.push(m);
           else skipped += 1;
         }
-        state.result.mensajes.skipped += skipped;
         if (batch.length) {
           const res = await this.importBatch(token, 'import-messages', importId, false, batch);
           this.tally(state.result.mensajes, state, res);
         }
-        state.progress.mensajes.done = job.cursor.messages;
+        state.result.mensajes.skipped += skipped;
+        job.cursor.messages = next;
+        state.progress.mensajes.done = next;
       }
       state.step = null;
       state.phase = 'done';

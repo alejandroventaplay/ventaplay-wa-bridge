@@ -241,6 +241,8 @@ export interface VentaPlayPlan {
   mensajesFuera: number;
   /** la sesión no guardó conversaciones: solo se importan contactos */
   soloContactos: boolean;
+  /** el historial ya terminó de llegar al validar (si no, faltará lo que llegue después) */
+  historialCompleto: boolean;
   /** filas que ocupa del cupo diario de VentaPlay */
   filas: number;
 }
@@ -265,6 +267,8 @@ export interface VentaPlayState {
   error: string | null;
   /** por qué quedó en pausa (p.ej. cupo diario agotado) */
   pausedReason: string | null;
+  /** se puede importar o retomar (false si fallaron los 5 de prueba: validar de nuevo) */
+  canResume: boolean;
   validatedAt: number | null;
   startedAt: number | null;
   finishedAt: number | null;

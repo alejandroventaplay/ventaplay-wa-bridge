@@ -385,6 +385,8 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   async requestPairing(phoneRaw: string): Promise<PairingCodeInfo> {
     if (this.record.linked)
       throw new HttpError(409, 'already_linked', 'Este WhatsApp ya está vinculado');
+    if (this.record.status === 'connecting')
+      throw new HttpError(409, 'linking', 'Ya escanearon: se está conectando, espera un momento');
     const phone = toPhoneDigits(phoneRaw);
     if (!phone) throw new HttpError(400, 'bad_phone', 'Escribe el número con código de país');
     await this.start();

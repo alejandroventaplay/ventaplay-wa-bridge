@@ -30,7 +30,9 @@ interface Call {
 }
 
 /** VentaPlay simulado: guarda las llamadas y responde como las APIs import-* */
-function fakeVentaPlay(opts: { rateLimitMessagesOnce?: boolean; badKey?: boolean } = {}) {
+function fakeVentaPlay(
+  opts: { rateLimitMessagesOnce?: boolean; badKey?: boolean; failRealClients?: boolean } = {},
+) {
   const calls: Call[] = [];
   let limited = Boolean(opts.rateLimitMessagesOnce);
   const reply = (status: number, body: unknown) =>
@@ -52,6 +54,16 @@ function fakeVentaPlay(opts: { rateLimitMessagesOnce?: boolean; badKey?: boolean
       return reply(429, { success: false, code: 'IMPORT_RATE_LIMITED', error: 'cupo' });
     }
     const items = body.items ?? [];
+    if (opts.failRealClients && endpoint === 'import-clients' && !body.dry_run)
+      return reply(200, {
+        success: true,
+        resultados: items.map((it) => ({
+          external_id: it.external_id,
+          status: 'error',
+          code: 'INTERNAL',
+          detalle: 'falla de prueba',
+        })),
+      });
     return reply(200, {
       success: true,
       resultados: items.map((it, i) => ({
@@ -336,6 +348,8 @@ describe('Directo a VentaPlay', () => {
     });
     const end = await poll(s, ['done', 'error']);
     expect(end.phase).toBe('done');
+    // ningún mensaje se pierde por la pausa
+    expect(end.result.mensajes.created).toBe(end.plan!.mensajes);
     expect(
       s.vp.calls.filter((c) => c.endpoint === 'import-clients' && !c.body.dry_run).length,
     ).toBe(clientCalls);
@@ -493,5 +507,80 @@ describe('vincular con código', () => {
     s.sim.scan(s.id);
     await waitFor(() => s.manager.get(s.id).status === 'connected', 5000, 'vinculado');
     expect(s.manager.get(s.id).summary().pairing).toBeNull();
+  });
+});
+
+describe('Directo a VentaPlay: casos borde', () => {
+  const poll = async (s: Awaited<ReturnType<typeof setup>>, phases: VentaPlayState['phase'][]) => {
+    for (let i = 0; i < 500; i++) {
+      const r = await s.app.inject({ url: `/sessions/${s.id}/ventaplay`, headers: auth });
+      const st = (r.json() as { state: VentaPlayState }).state;
+      if (phases.includes(st.phase)) return st;
+      await new Promise((res) => setTimeout(res, 20));
+    }
+    throw new Error('timeout esperando la importación');
+  };
+
+  it('si fallan los 5 de prueba se detiene y no deja retomar sin validar de nuevo', async () => {
+    const s = await setup(fakeVentaPlay({ failRealClients: true }));
+    await linkWithMigration(s);
+    const v = await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/validate`,
+      headers: auth,
+      payload: { token: ORG_KEY },
+    });
+    const st = (v.json() as { state: VentaPlayState }).state;
+    expect(st.plan!.historialCompleto).toBe(true);
+    expect(st.canResume).toBe(true);
+    await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/import`,
+      headers: auth,
+    });
+    const end = await poll(s, ['error', 'done']);
+    expect(end.phase).toBe('error');
+    expect(end.canResume).toBe(false);
+    expect(end.progress.clientes.done).toBe(5);
+    expect(
+      s.vp.calls.filter((c) => c.endpoint === 'import-messages' && !c.body.dry_run),
+    ).toHaveLength(0);
+    const again = await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/import`,
+      headers: auth,
+    });
+    expect(again.statusCode).toBe(409);
+  });
+
+  it('sin agente conectado, enviar el código responde claro y no rompe nada', async () => {
+    const s = await setup();
+    const p = await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/pairing-code`,
+      headers: auth,
+      payload: { phone: '+56 9 4047 8363' },
+    });
+    expect(p.statusCode).toBe(200);
+    const r = await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/pairing-code/send`,
+      headers: auth,
+    });
+    expect(r.statusCode).toBe(409);
+    expect((r.json() as { error: string }).error).toBe('no_agent');
+    // el código sigue ahí para copiarlo a mano
+    expect(s.manager.get(s.id).summary().pairing?.code).toBeTruthy();
+  });
+
+  it('enviar el código sin haberlo pedido responde claro', async () => {
+    const s = await setup();
+    const r = await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/pairing-code/send`,
+      headers: auth,
+    });
+    expect(r.statusCode).toBe(409);
+    expect((r.json() as { error: string }).error).toBe('no_code');
   });
 });

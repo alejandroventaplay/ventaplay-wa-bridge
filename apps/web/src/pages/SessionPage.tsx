@@ -59,7 +59,8 @@ export function SessionPage() {
     return () => {
       alive = false;
     };
-  }, [id, waiting]);
+    // se vuelve a mirar al pedir un código (el agente pudo conectarse o desconectarse)
+  }, [id, waiting, session?.pairing?.requestedAt]);
 
   // proyectos (chats aislados): pestañas al lado de General
   useEffect(() => {
