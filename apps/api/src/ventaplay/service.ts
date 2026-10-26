@@ -82,6 +82,8 @@ interface Job {
   running: boolean;
   /** fallaron los 5 de prueba: no se puede retomar, hay que revisar y validar de nuevo */
   blocked: boolean;
+  /** los primeros mensajes ya entraron bien */
+  messagesProven: boolean;
 }
 
 const zero = (): VentaPlayCounts => ({ created: 0, updated: 0, skipped: 0, errors: 0 });
@@ -169,6 +171,7 @@ export class VentaPlayService {
       cursor: { clients: 0, messages: 0 },
       running: false,
       blocked: false,
+      messagesProven: false,
     };
     this.jobs.set(id, job);
     try {
@@ -302,22 +305,38 @@ export class VentaPlayService {
       while (job.cursor.messages < msgs.length) {
         // el cursor avanza recién cuando VentaPlay aceptó el lote: si se corta o se
         // agota el cupo, al retomar se vuelve a mandar el mismo lote (no se pierde nada)
+        // los primeros mensajes también van de prueba: si fallan todos, se detiene
+        // antes de gastar el cupo en miles de mensajes que no entrarían
+        const canary = !job.messagesProven;
+        state.step = canary ? 'canario' : 'mensajes';
+        const size = canary ? CANARY : BATCH;
         const batch: MessageItem[] = [];
         let skipped = 0;
         let next = job.cursor.messages;
-        while (next < msgs.length && batch.length < BATCH) {
+        while (next < msgs.length && batch.length < size) {
           const m = msgs[next]!;
           next += 1;
           if (job.okClients.has(m.cliente_external_id)) batch.push(m);
           else skipped += 1;
         }
+        let failed = 0;
         if (batch.length) {
           const res = await this.importBatch(token, 'import-messages', importId, false, batch);
-          this.tally(state.result.mensajes, state, res);
+          failed = this.tally(state.result.mensajes, state, res);
         }
         state.result.mensajes.skipped += skipped;
         job.cursor.messages = next;
         state.progress.mensajes.done = next;
+        if (canary && batch.length) {
+          if (failed === batch.length) {
+            job.blocked = true;
+            state.phase = 'error';
+            state.error =
+              'Fallaron los mensajes de prueba: no se cargó el resto. Revisa los errores antes de seguir.';
+            return;
+          }
+          job.messagesProven = true;
+        }
       }
       state.step = null;
       state.phase = 'done';

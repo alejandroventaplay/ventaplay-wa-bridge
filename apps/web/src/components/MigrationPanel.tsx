@@ -477,7 +477,9 @@ export function VentaPlayExporter({ session }: { session: SessionSummary }) {
                 <p className="flex items-center gap-2 font-bold text-violeta">
                   <Spinner className="size-4" />
                   {state.step === 'canario'
-                    ? 'Probando con 5 clientes reales…'
+                    ? state.progress.clientes.done < state.progress.clientes.total
+                      ? 'Probando con 5 clientes reales…'
+                      : 'Probando con 5 mensajes reales…'
                     : state.step === 'clientes'
                       ? 'Cargando clientes…'
                       : 'Cargando mensajes…'}

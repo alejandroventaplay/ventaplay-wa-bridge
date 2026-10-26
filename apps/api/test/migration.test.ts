@@ -31,7 +31,12 @@ interface Call {
 
 /** VentaPlay simulado: guarda las llamadas y responde como las APIs import-* */
 function fakeVentaPlay(
-  opts: { rateLimitMessagesOnce?: boolean; badKey?: boolean; failRealClients?: boolean } = {},
+  opts: {
+    rateLimitMessagesOnce?: boolean;
+    badKey?: boolean;
+    failRealClients?: boolean;
+    failRealMessages?: boolean;
+  } = {},
 ) {
   const calls: Call[] = [];
   let limited = Boolean(opts.rateLimitMessagesOnce);
@@ -54,7 +59,10 @@ function fakeVentaPlay(
       return reply(429, { success: false, code: 'IMPORT_RATE_LIMITED', error: 'cupo' });
     }
     const items = body.items ?? [];
-    if (opts.failRealClients && endpoint === 'import-clients' && !body.dry_run)
+    if (
+      (opts.failRealClients && endpoint === 'import-clients' && !body.dry_run) ||
+      (opts.failRealMessages && endpoint === 'import-messages' && !body.dry_run)
+    )
       return reply(200, {
         success: true,
         resultados: items.map((it) => ({
@@ -551,6 +559,28 @@ describe('Directo a VentaPlay: casos borde', () => {
       headers: auth,
     });
     expect(again.statusCode).toBe(409);
+  });
+
+  it('si fallan los mensajes de prueba se detiene sin gastar el cupo', async () => {
+    const s = await setup(fakeVentaPlay({ failRealMessages: true }));
+    await linkWithMigration(s);
+    await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/validate`,
+      headers: auth,
+      payload: { token: ORG_KEY },
+    });
+    await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/import`,
+      headers: auth,
+    });
+    const end = await poll(s, ['error', 'done']);
+    expect(end.phase).toBe('error');
+    expect(end.canResume).toBe(false);
+    const msgCalls = s.vp.calls.filter((c) => c.endpoint === 'import-messages' && !c.body.dry_run);
+    expect(msgCalls).toHaveLength(1);
+    expect(msgCalls[0]!.body.items!.length).toBeLessThanOrEqual(5);
   });
 
   it('sin agente conectado, enviar el código responde claro y no rompe nada', async () => {
