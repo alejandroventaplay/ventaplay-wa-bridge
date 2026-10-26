@@ -8,7 +8,8 @@ import { buildContactsWorkbook, contactsFileName } from '../export/contacts-xlsx
 import { buildConversationsWorkbook, conversationsFileName } from '../export/conversations-xlsx.js';
 import { VentaPlayService } from '../ventaplay/service.js';
 import { HttpError, type SessionManager } from '../session/manager.js';
-import { StatsAggregator } from '../session/stats.js';
+import { isGroupJid, phoneOf, StatsAggregator, type Directory } from '../session/stats.js';
+import type { StoredMessage } from '../session/message-vault.js';
 import { openFolder } from '../dev/open-folder.js';
 import {
   bridgeZip,
@@ -100,6 +101,19 @@ const MigrationBody = z.object({
   relink: z.boolean().optional(),
 });
 const ForgetBody = z.object({ token: z.boolean().optional() });
+const PrivacyBody = z.object({
+  active: z.boolean().optional(),
+  reviewIncluded: z.boolean().optional(),
+  decisions: z
+    .record(
+      z.string().regex(/^\d{6,16}$/, 'número inválido'),
+      z.enum(['incluir', 'excluir']).nullable(),
+    )
+    .refine((d) => Object.keys(d).length <= 5000, 'demasiadas decisiones')
+    .optional(),
+  reset: z.boolean().optional(),
+  approve: z.object({ by: z.string().trim().min(2).max(120) }).optional(),
+});
 const SeedBody = z.object({
   org: z.string().trim().min(3).max(80),
   orgName: z.string().trim().max(120).nullish(),
@@ -131,6 +145,21 @@ export async function buildServer(deps: ServerDeps) {
       // solo para probar contra un VentaPlay local; por defecto, producción
       baseUrl: process.env.VENTAPLAY_API_URL || undefined,
     });
+
+  /** con el filtro de privacidad activo, saca de los Excel a los contactos excluidos */
+  async function withPrivacy(
+    id: string,
+    directory: Directory,
+    chats?: { jid: string; messages: StoredMessage[] }[],
+  ) {
+    const ex = await ventaplay.excluded(id, chats ? { directory, chats } : { directory });
+    if (!ex) return { directory, chats };
+    const keep = (phone: string | null) => !phone || !ex.has(phone);
+    return {
+      directory: { ...directory, people: directory.people.filter((p) => keep(p.phone)) },
+      chats: chats?.filter((c) => isGroupJid(c.jid) || keep(phoneOf(c.jid))),
+    };
+  }
   const app = Fastify({
     loggerInstance: deps.logger,
   });
@@ -227,7 +256,7 @@ export async function buildServer(deps: ServerDeps) {
       const { id } = IdParams.parse(req.params);
       const { modo } = ExportQuery.parse(req.query);
       const session = manager.get(id);
-      const directory = await session.directory();
+      const { directory } = await withPrivacy(id, await session.directory());
       const summary = session.summary();
       const exportedAt = Date.now();
       const file = await buildContactsWorkbook({
@@ -492,10 +521,11 @@ export async function buildServer(deps: ServerDeps) {
         );
       const summary = session.summary();
       const exportedAt = Date.now();
+      const filtered = await withPrivacy(id, await session.directory(), session.migrationChats());
       const file = await buildConversationsWorkbook({
         session: summary,
-        directory: await session.directory(),
-        chats: session.migrationChats(),
+        directory: filtered.directory,
+        chats: filtered.chats ?? [],
         exportedAt,
       });
       req.log.info(
@@ -510,6 +540,37 @@ export async function buildServer(deps: ServerDeps) {
         )
         .header('cache-control', 'no-store')
         .send(file);
+    });
+
+    /**
+     * Filtro de privacidad (voluntario): lista de contactos con la sugerencia
+     * comercial / privado / revisar, las decisiones a mano y si entran o no.
+     */
+    api.get('/sessions/:id/privacy', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      const { resumen } = z.object({ resumen: z.string().optional() }).parse(req.query ?? {});
+      manager.get(id);
+      const privacy = await ventaplay.privacy(id);
+      // resumen: solo contadores y aprobación (para la tarjeta del panel)
+      return { privacy: resumen ? { ...privacy, rows: [] } : privacy };
+    });
+
+    /** activa/apaga el filtro y guarda decisiones a mano (incluir / excluir / null) */
+    api.post('/sessions/:id/privacy', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      manager.get(id);
+      const body = PrivacyBody.parse(req.body ?? {});
+      req.log.info(
+        {
+          session: id,
+          active: body.active,
+          decisiones: Object.keys(body.decisions ?? {}).length,
+          aprueba: body.approve ? body.approve.by : undefined,
+          by: req.principal?.email ?? req.principal?.sub,
+        },
+        'filtro de privacidad: cambio',
+      );
+      return { privacy: await ventaplay.setPrivacy(id, body) };
     });
 
     api.get('/sessions/:id/ventaplay', async (req) => {

@@ -17,7 +17,7 @@ import { useNow } from '../hooks/streams';
 import { api, type ExportPreview } from '../lib/api';
 import { fmtAgo, fmtDate, fmtNumber, fmtPhone, fmtSpan } from '../lib/format';
 import { Avatar, Spinner } from './ui';
-import { ConversationsExporter, VentaPlayExporter } from './MigrationPanel';
+import { ConversationsExporter, PrivacyExporter, VentaPlayExporter } from './MigrationPanel';
 
 interface Props {
   session: SessionSummary;
@@ -115,6 +115,7 @@ function Exporters({ session }: { session: SessionSummary }) {
       <ul className="mt-5 divide-y divide-line">
         <ExcelContactsExporter session={session} disabled={!hasData} />
         {session.migration && <ConversationsExporter session={session} />}
+        {session.migration && <PrivacyExporter session={session} />}
         <VentaPlayExporter session={session} />
       </ul>
     </section>

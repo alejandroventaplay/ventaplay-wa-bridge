@@ -249,6 +249,87 @@ export interface VentaPlayPlan {
   modo: 'completo' | 'actualizar';
   /** lo que ya estaba enviado a esta org (registro) */
   yaEnviados: { clientes: number; mensajes: number };
+  /** filtro de privacidad activo: lo que se dejó fuera (null = filtro apagado) */
+  privados: { clientes: number; mensajes: number } | null;
+}
+
+// ------------------------------------------------------------ filtro de privacidad
+
+/** sugerencia automática por contacto */
+export type PrivacyCategory = 'comercial' | 'privado' | 'revisar';
+/** lo que decidió una persona (pisa la sugerencia); null = usa la sugerencia */
+export type PrivacyDecision = 'incluir' | 'excluir';
+
+export interface PrivacyRow {
+  /** número sin '+' (clave del contacto en VentaPlay) */
+  phone: string;
+  name: string;
+  /** nombre guardado en la agenda del teléfono, si lo tiene */
+  savedName: string | null;
+  messages: number;
+  firstAt: number | null;
+  lastAt: number | null;
+  /** último mensaje con texto (recortado) */
+  lastText: string | null;
+  lastFromMe: boolean | null;
+  suggestion: PrivacyCategory;
+  /** por qué: palabras o señales que encontró */
+  reasons: string[];
+  decision: PrivacyDecision | null;
+  /** resultado final: true = se importa */
+  include: boolean;
+}
+
+export interface PrivacyCounts {
+  comercial: number;
+  privado: number;
+  revisar: number;
+  incluidos: number;
+  excluidos: number;
+  /** decisiones a mano */
+  manuales: number;
+  /** mensajes de los contactos que entran */
+  mensajesIncluidos: number;
+  /** contactos que entran y tienen conversación */
+  conversacionesIncluidas: number;
+}
+
+export interface PrivacyState {
+  /** filtro aplicado al importar a VentaPlay y en los Excel */
+  active: boolean;
+  /** "revisar" entra o no si nadie decide (por defecto no entra) */
+  reviewIncluded: boolean;
+  updatedAt: number | null;
+  /** aprobación final (se borra con cualquier cambio posterior) */
+  approval: PrivacyApproval | null;
+  counts: PrivacyCounts;
+  rows: PrivacyRow[];
+}
+
+export interface VentaPlayPrivacyInfo {
+  active: boolean;
+  approval: PrivacyApproval | null;
+  /** el filtro cambió después de validar: hay que validar de nuevo */
+  stale: boolean;
+}
+
+export interface PrivacyApproval {
+  by: string;
+  at: number;
+  /** lo que se aprobó: contactos y mensajes que entran */
+  contactos: number;
+  mensajes: number;
+}
+
+export interface PrivacyUpdate {
+  active?: boolean;
+  reviewIncluded?: boolean;
+  /** número → decisión; null borra la decisión (vuelve a la sugerencia) */
+  decisions?: Record<string, PrivacyDecision | null>;
+  /** borra todas las decisiones a mano */
+  reset?: boolean;
+  /** aprobación final: activa el filtro y deja la lista lista para cargar */
+  approve?: { by: string };
 }
 
 export interface VentaPlayState {
@@ -277,6 +358,8 @@ export interface VentaPlayState {
   saved: VentaPlaySaved | null;
   /** sin token guardado: lo ya enviado antes a cada org (validar con su key = solo lo nuevo) */
   previous: VentaPlayPrevious[];
+  /** filtro personal / laboral: si está activo hay que aprobarlo antes de cargar */
+  privacy: VentaPlayPrivacyInfo;
   validatedAt: number | null;
   startedAt: number | null;
   finishedAt: number | null;

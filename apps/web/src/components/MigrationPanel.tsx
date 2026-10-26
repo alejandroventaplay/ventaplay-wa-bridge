@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router';
 import {
   ArrowRightLeft,
   CircleCheck,
@@ -12,7 +13,7 @@ import {
   TriangleAlert,
   Workflow,
 } from 'lucide-react';
-import type { SessionSummary, VentaPlayState } from '@wa-bridge/shared';
+import type { PrivacyState, SessionSummary, VentaPlayState } from '@wa-bridge/shared';
 import { api } from '../lib/api';
 import { fmtDateTime, fmtNumber } from '../lib/format';
 import { Dialog, Spinner } from './ui';
@@ -254,6 +255,58 @@ export function ConversationsExporter({ session }: { session: SessionSummary }) 
   );
 }
 
+/** fila del panel: filtro personal / interés laboral con su estado y aprobación */
+export function PrivacyExporter({ session }: { session: SessionSummary }) {
+  const [p, setP] = useState<PrivacyState | null>(null);
+  const ready = Boolean(session.migration && !session.migration.awaitingLink);
+  useEffect(() => {
+    if (!ready) return;
+    let alive = true;
+    api
+      .privacy(session.id, true)
+      .then((x) => alive && setP(x))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [session.id, ready, session.migration?.messages]);
+  return (
+    <li className="flex flex-col gap-4 py-4 sm:flex-row sm:items-start">
+      <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-amber-50 text-amber-800">
+        <ShieldCheck className="size-5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="font-black">Filtro personal / interés laboral</p>
+        <p className="text-sm text-ink-soft">
+          Opcional, antes de cargar a VentaPlay: separa lo personal de lo laboral, revisa la lista y
+          aprueba. Lo que quede fuera no sale del Bridge (ni a VentaPlay ni en los Excel).
+        </p>
+        {p && (
+          <p className="mt-2 text-xs font-bold text-ink-soft">
+            Entran {fmtNumber(p.counts.incluidos)} · fuera {fmtNumber(p.counts.excluidos)} · por
+            revisar {fmtNumber(p.counts.revisar)}
+            {p.approval ? (
+              <span className="text-green-700">
+                {' '}
+                · aprobado por {p.approval.by} ({fmtDateTime(p.approval.at)})
+              </span>
+            ) : p.active ? (
+              <span className="text-amber-700"> · falta la aprobación final</span>
+            ) : null}
+          </p>
+        )}
+      </div>
+      <Link
+        to={`/s/${session.id}/filtro`}
+        className={`btn-primary shrink-0 ${ready ? '' : 'pointer-events-none opacity-50'}`}
+        aria-disabled={!ready}
+      >
+        <ShieldCheck className="size-4" /> {p?.approval ? 'Ver filtro' : 'Revisar y aprobar'}
+      </Link>
+    </li>
+  );
+}
+
 const ACTIVE: VentaPlayState['phase'][] = ['validating', 'importing'];
 
 /** "Directo a VentaPlay": token → validar (en seco) → importar → informe */
@@ -307,6 +360,9 @@ export function VentaPlayExporter({ session }: { session: SessionSummary }) {
   const idleLike = phase === 'idle' || (phase === 'error' && !plan);
   const showForm = idleLike && !saved;
   const update = plan?.modo === 'actualizar';
+  const pv = state?.privacy;
+  /** filtro activo sin aprobar, o cambió después de validar: no se puede cargar */
+  const privacyBlock = pv?.active ? !pv.approval || pv.stale : false;
 
   return (
     <li className="flex flex-col gap-4 py-4 sm:flex-row sm:items-start">
@@ -457,6 +513,14 @@ export function VentaPlayExporter({ session }: { session: SessionSummary }) {
                 {fmtNumber(plan.grupos)} grupos
                 {plan.mensajesFuera ? ` (${fmtNumber(plan.mensajesFuera)} mensajes)` : ''}.
               </li>
+              {plan.privados && (
+                <li>
+                  <b className="text-ink">Filtro personal / laboral</b>: quedan fuera{' '}
+                  {fmtNumber(plan.privados.clientes)} contactos
+                  {plan.privados.mensajes ? ` (${fmtNumber(plan.privados.mensajes)} mensajes)` : ''}
+                  .
+                </li>
+              )}
               <li>
                 Ocupa {fmtNumber(plan.filas)} filas del cupo diario de VentaPlay (50.000 por
                 defecto).
@@ -514,6 +578,33 @@ export function VentaPlayExporter({ session }: { session: SessionSummary }) {
               </ul>
             )}
 
+            {privacyBlock && phase !== 'importing' && phase !== 'done' && (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-amber-900">
+                <ShieldCheck className="size-4 shrink-0" />
+                <span className="flex-1">
+                  {!pv?.approval
+                    ? 'Falta la aprobación final del filtro personal / laboral.'
+                    : 'El filtro cambió después de validar: valida de nuevo.'}
+                </span>
+                {!pv?.approval ? (
+                  <Link
+                    to={`/s/${session.id}/filtro`}
+                    className="btn-secondary px-3 py-1.5 text-xs"
+                  >
+                    Revisar y aprobar
+                  </Link>
+                ) : (
+                  <button
+                    className="btn-secondary px-3 py-1.5 text-xs"
+                    disabled={busy}
+                    onClick={() => void act(() => api.ventaplayValidate(session.id, {}))}
+                  >
+                    <RefreshCw className="size-3.5" /> Validar de nuevo
+                  </button>
+                )}
+              </div>
+            )}
+
             {phase === 'paused' && (
               <p className="flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-amber-900">
                 <PauseCircle className="mt-0.5 size-4 shrink-0" /> {state.pausedReason}
@@ -533,7 +624,11 @@ export function VentaPlayExporter({ session }: { session: SessionSummary }) {
 
             <div className="flex flex-wrap gap-2">
               {state.canResume && (
-                <button className="btn-primary" disabled={busy} onClick={() => setConfirm(true)}>
+                <button
+                  className="btn-primary"
+                  disabled={busy || privacyBlock}
+                  onClick={() => setConfirm(true)}
+                >
                   {phase === 'validated' ? (
                     <Workflow className="size-4" />
                   ) : (
@@ -615,6 +710,12 @@ export function VentaPlayExporter({ session }: { session: SessionSummary }) {
             )}{' '}
             en <b>{state.org?.nombre}</b>. Primero se prueban 5 clientes reales; si alguno falla, se
             detiene. Repetir no duplica nada.
+            {state.privacy.approval && (
+              <>
+                {' '}
+                Filtro personal / laboral aprobado por <b>{state.privacy.approval.by}</b>.
+              </>
+            )}
           </p>
         )}
       </Dialog>

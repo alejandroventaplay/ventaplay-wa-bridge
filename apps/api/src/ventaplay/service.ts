@@ -1,5 +1,7 @@
 import type { Logger } from 'pino';
 import type {
+  PrivacyState,
+  PrivacyUpdate,
   VentaPlayCounts,
   VentaPlayOrg,
   VentaPlayPrevious,
@@ -17,6 +19,14 @@ import {
   type MessageItem,
   type MigrationItems,
 } from './plan.js';
+import {
+  buildPrivacyRows,
+  countRows,
+  parseSettings,
+  privacyState,
+  type PrivacySettings,
+  type PrivacySource,
+} from './privacy.js';
 
 /** APIs de VentaPlay (Supabase Edge Functions) */
 export const VENTAPLAY_API_URL = 'https://uklfdugabopbuqmpoiao.supabase.co/functions/v1';
@@ -31,6 +41,7 @@ export interface MigrationSessionLike {
     profile: { phone?: string | null; name?: string | null } | null;
     label: string | null;
     stats: { state: string };
+    migration?: { consentBy: string | null } | null;
   };
   directory(): Promise<Directory>;
   readonly isMigrating: boolean;
@@ -44,6 +55,8 @@ export interface MigrationSessionLike {
 /** claves en el almacén cifrado de la sesión */
 export const LINK_KEY = 'ventaplay:link';
 export const SENT_KEY = (org: string) => `ventaplay:sent:${org}`;
+/** filtro de privacidad: activo, decisiones a mano */
+export const PRIVACY_KEY = 'ventaplay:privacy';
 /** cada cuántos lotes se guarda el registro de lo enviado (y siempre al terminar o cortarse) */
 const SAVE_EVERY = 5;
 
@@ -121,6 +134,8 @@ interface Job {
   blocked: boolean;
   /** los primeros mensajes ya entraron bien */
   messagesProven: boolean;
+  /** versión del filtro de privacidad con que se validó (updatedAt) */
+  privacyStamp: number | null;
 }
 
 const zero = (): VentaPlayCounts => ({ created: 0, updated: 0, skipped: 0, errors: 0 });
@@ -139,6 +154,7 @@ const idle = (): VentaPlayState => ({
   canResume: false,
   saved: null,
   previous: [],
+  privacy: { active: false, approval: null, stale: false },
   validatedAt: null,
   startedAt: null,
   finishedAt: null,
@@ -175,9 +191,106 @@ export class VentaPlayService {
         !job.blocked &&
         Boolean(st.plan?.filas) &&
         (st.phase === 'validated' || st.phase === 'paused' || st.phase === 'error');
+    const privacy = await this.privacySettings(id);
+    st.privacy = {
+      active: privacy.active,
+      approval: privacy.approval,
+      stale: Boolean(job?.state.plan) && job!.privacyStamp !== privacy.updatedAt,
+    };
     st.saved = await this.savedInfo(id);
     st.previous = st.saved ? [] : await this.previousInfo(id);
     return st;
+  }
+
+  // ---------------------------------------------------------- filtro de privacidad
+
+  private async privacySettings(id: string): Promise<PrivacySettings> {
+    return parseSettings(await this.deps.getSession(id).readVentaPlay(PRIVACY_KEY));
+  }
+
+  private async privacySource(
+    id: string,
+    part: Partial<PrivacySource> = {},
+  ): Promise<PrivacySource> {
+    const session = this.deps.getSession(id);
+    const summary = session.summary();
+    return {
+      sessionPhone: part.sessionPhone ?? (summary.profile?.phone ?? '').replace(/\D/g, ''),
+      businessName: summary.profile?.name ?? null,
+      ownerName: summary.migration?.consentBy ?? null,
+      directory: part.directory ?? (await session.directory()),
+      chats:
+        part.chats !== undefined
+          ? part.chats
+          : session.isMigrating
+            ? session.migrationChats()
+            : null,
+    };
+  }
+
+  /** lista para revisar: sugerencia, decisión y si entra o no, por contacto */
+  async privacy(id: string): Promise<PrivacyState> {
+    const settings = await this.privacySettings(id);
+    return privacyState(buildPrivacyRows(await this.privacySource(id), settings), settings);
+  }
+
+  async setPrivacy(id: string, update: PrivacyUpdate): Promise<PrivacyState> {
+    if (this.jobs.get(id)?.running)
+      throw new HttpError(409, 'importing', 'Hay una importación en curso');
+    const settings = await this.privacySettings(id);
+    const changes =
+      Boolean(update.reset) ||
+      Object.keys(update.decisions ?? {}).length > 0 ||
+      update.active !== undefined ||
+      update.reviewIncluded !== undefined;
+    if (update.reset) settings.decisions = {};
+    for (const [phone, d] of Object.entries(update.decisions ?? {})) {
+      if (!/^\d{6,16}$/.test(phone))
+        throw new HttpError(400, 'bad_phone', `Número inválido: ${phone}`);
+      if (d) settings.decisions[phone] = d;
+      else delete settings.decisions[phone];
+    }
+    // decidir algo enciende el filtro: desde ahí, cargar a VentaPlay pide la aprobación final
+    if (Object.keys(update.decisions ?? {}).length || update.reviewIncluded !== undefined)
+      settings.active = true;
+    if (update.active !== undefined) settings.active = update.active;
+    if (update.reviewIncluded !== undefined) settings.reviewIncluded = update.reviewIncluded;
+    // cualquier cambio invalida la aprobación final: hay que volver a aprobar lo nuevo
+    if (changes) settings.approval = null;
+    if (update.approve) {
+      const rows = buildPrivacyRows(await this.privacySource(id), settings);
+      const counts = countRows(rows);
+      settings.active = true;
+      settings.approval = {
+        by: update.approve.by.trim(),
+        at: Date.now(),
+        contactos: counts.incluidos,
+        mensajes: counts.mensajesIncluidos,
+      };
+    }
+    settings.updatedAt = Date.now();
+    await this.deps.getSession(id).writeVentaPlay({ [PRIVACY_KEY]: JSON.stringify(settings) });
+    this.deps.logger.info(
+      {
+        session: id,
+        active: settings.active,
+        reviewIncluded: settings.reviewIncluded,
+        decisiones: Object.keys(settings.decisions).length,
+        aprobado: settings.approval
+          ? { contactos: settings.approval.contactos, mensajes: settings.approval.mensajes }
+          : null,
+      },
+      'filtro de privacidad actualizado',
+    );
+    return this.privacy(id);
+  }
+
+  /** números que el filtro deja fuera; null si el filtro está apagado */
+  async excluded(id: string, part: Partial<PrivacySource> = {}): Promise<Set<string> | null> {
+    const settings = await this.privacySettings(id);
+    if (!settings.active) return null;
+    const rows = buildPrivacyRows(await this.privacySource(id, part), settings);
+    return new Set(rows.filter((r) => !r.include).map((r) => r.phone));
   }
 
   /**
@@ -272,6 +385,7 @@ export class VentaPlayService {
         grupos: 0,
         chatsConMensajes: 0,
         mensajesFuera: 0,
+        privados: null,
       },
       predicted: new Map(),
       okClients: new Set(),
@@ -279,6 +393,7 @@ export class VentaPlayService {
       running: false,
       blocked: false,
       messagesProven: false,
+      privacyStamp: (await this.privacySettings(id)).updatedAt,
     };
     this.jobs.set(id, job);
     try {
@@ -295,14 +410,17 @@ export class VentaPlayService {
       job.registry = reg;
       const mode = req.mode ?? (reg.clients.size || reg.messages.size ? 'actualizar' : 'completo');
       const chats = session.isMigrating ? session.migrationChats() : null;
+      const directory = await session.directory();
+      const exclude = await this.excluded(id, { sessionPhone, directory, chats });
       job.items = buildItems(
         {
           sessionPhone,
           sessionName: summary.profile?.name ?? summary.label,
-          directory: await session.directory(),
+          directory,
           chats,
         },
         phoneNumberId,
+        exclude,
       );
       if (mode === 'actualizar') {
         // solo lo que VentaPlay no ha aceptado antes; los clientes ya enviados sirven
@@ -349,6 +467,7 @@ export class VentaPlayService {
         filas: job.items.clients.length + job.items.messages.length,
         modo: mode,
         yaEnviados: { clientes: reg.clients.size, mensajes: reg.messages.size },
+        privados: job.items.privados,
       };
       state.progress = {
         clientes: { done: 0, total: job.items.clients.length },
@@ -541,6 +660,19 @@ export class VentaPlayService {
         409,
         'canary_failed',
         'Fallaron los clientes de prueba: revisa los errores y vuelve a validar',
+      );
+    const privacy = await this.privacySettings(id);
+    if (privacy.updatedAt !== job.privacyStamp)
+      throw new HttpError(
+        409,
+        'privacy_changed',
+        'El filtro personal / laboral cambió después de validar: valida de nuevo',
+      );
+    if (privacy.active && !privacy.approval)
+      throw new HttpError(
+        409,
+        'privacy_not_approved',
+        'Falta la aprobación final del filtro personal / laboral',
       );
     job.running = true;
     job.state.phase = 'importing';

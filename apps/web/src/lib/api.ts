@@ -1,5 +1,7 @@
 import type {
   AssistantRequest,
+  PrivacyState,
+  PrivacyUpdate,
   MigrationRequest,
   VentaPlayState,
   VentaPlayValidateRequest,
@@ -192,6 +194,16 @@ export const api = {
     }).then((r) => r.session),
   /** Excel de conversaciones (Chats + Mensajes), solo en modo migración */
   downloadConversationsXlsx: (id: string) => download(`/sessions/${id}/export/conversations.xlsx`),
+  /** filtro personal / laboral; resumen = sin la lista (solo contadores y aprobación) */
+  privacy: (id: string, resumen = false) =>
+    request<{ privacy: PrivacyState }>(
+      `/sessions/${id}/privacy${resumen ? '?resumen=1' : ''}`,
+    ).then((r) => r.privacy),
+  setPrivacy: (id: string, body: PrivacyUpdate) =>
+    request<{ privacy: PrivacyState }>(`/sessions/${id}/privacy`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }).then((r) => r.privacy),
   ventaplay: (id: string) =>
     request<{ state: VentaPlayState }>(`/sessions/${id}/ventaplay`).then((r) => r.state),
   ventaplayValidate: (id: string, body: VentaPlayValidateRequest) =>

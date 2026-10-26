@@ -2,7 +2,7 @@ import { Writable } from 'node:stream';
 import ExcelJS from 'exceljs';
 import pino from 'pino';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { SessionSummary, VentaPlayState } from '@wa-bridge/shared';
+import type { PrivacyState, SessionSummary, VentaPlayState } from '@wa-bridge/shared';
 import { loadConfig } from '../src/config.js';
 import { createAuthenticator } from '../src/http/auth.js';
 import { buildServer } from '../src/http/server.js';
@@ -761,5 +761,142 @@ describe('Actualizar: registro guardado con otra llave de la org', () => {
     const st = (r.json() as { state: VentaPlayState }).state;
     expect(st.plan!.modo).toBe('actualizar');
     expect(st.plan!.filas).toBe(0);
+  });
+});
+
+describe('filtro de privacidad antes de importar', () => {
+  it('lista, decide a mano y la importación y el Excel dejan fuera lo excluido', async () => {
+    const s = await setup();
+    await linkWithMigration(s);
+    const g = await s.app.inject({ url: `/sessions/${s.id}/privacy`, headers: auth });
+    expect(g.statusCode).toBe(200);
+    const p0 = (g.json() as { privacy: PrivacyState }).privacy;
+    expect(p0.active).toBe(false);
+    expect(p0.rows.length).toBeGreaterThan(1);
+    const withChat = p0.rows.find((r) => r.messages > 0)!;
+    expect(withChat.reasons.length).toBeGreaterThan(0);
+
+    // filtro apagado: el plan no deja nada fuera
+    const v0 = await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/validate`,
+      headers: auth,
+      payload: { token: ORG_KEY },
+    });
+    const st0 = (v0.json() as { state: VentaPlayState }).state;
+    expect(st0.plan!.privados).toBeNull();
+
+    // activa, incluye "revisar" y excluye a mano al contacto con chat
+    const r = await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/privacy`,
+      headers: auth,
+      payload: { active: true, reviewIncluded: true, decisions: { [withChat.phone]: 'excluir' } },
+    });
+    expect(r.statusCode).toBe(200);
+    const p1 = (r.json() as { privacy: PrivacyState }).privacy;
+    expect(p1.active).toBe(true);
+    expect(p1.counts.manuales).toBe(1);
+    expect(p1.rows.find((x) => x.phone === withChat.phone)!.include).toBe(false);
+
+    const v1 = await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/validate`,
+      headers: auth,
+      payload: { token: ORG_KEY },
+    });
+    const st1 = (v1.json() as { state: VentaPlayState }).state;
+    expect(st1.plan!.privados!.clientes).toBe(p1.counts.excluidos);
+    expect(st1.plan!.privados!.mensajes).toBeGreaterThan(0);
+    expect(st1.plan!.mensajes).toBe(st0.plan!.mensajes - st1.plan!.privados!.mensajes);
+    const sentPhones = s.vp.calls
+      .filter((c) => c.endpoint === 'import-clients')
+      .flatMap((c) => c.body.items!.map((it) => it.telefono));
+    expect(sentPhones.filter((ph) => ph === withChat.phone).length).toBe(1); // solo la 1ª validación
+
+    // el Excel de conversaciones tampoco lo trae
+    const x = await s.app.inject({
+      url: `/sessions/${s.id}/export/conversations.xlsx`,
+      headers: auth,
+    });
+    const wb = await readXlsx(x.rawPayload);
+    const chats = wb.getWorksheet('Chats')!;
+    const col = colOf(chats, 'ID chat');
+    const ids: string[] = [];
+    chats.eachRow((row, i) => {
+      if (i > 1) ids.push(String(row.getCell(col).value));
+    });
+    expect(ids).not.toContain(withChat.phone);
+
+    // número inválido → 400
+    const bad = await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/privacy`,
+      headers: auth,
+      payload: { decisions: { abc: 'excluir' } },
+    });
+    expect(bad.statusCode).toBe(400);
+  });
+});
+
+describe('aprobación final del filtro antes de cargar', () => {
+  const poll = async (s: Awaited<ReturnType<typeof setup>>, phases: VentaPlayState['phase'][]) => {
+    for (let i = 0; i < 500; i++) {
+      const r = await s.app.inject({ url: `/sessions/${s.id}/ventaplay`, headers: auth });
+      const st = (r.json() as { state: VentaPlayState }).state;
+      if (phases.includes(st.phase)) return st;
+      await new Promise((res) => setTimeout(res, 20));
+    }
+    throw new Error('timeout');
+  };
+  const post = (s: Awaited<ReturnType<typeof setup>>, url: string, payload?: object) =>
+    s.app.inject({ method: 'POST', url: `/sessions/${s.id}${url}`, headers: auth, payload });
+
+  it('con el filtro activo no carga sin aprobar; aprobar pide validar de nuevo; luego carga sin lo excluido', async () => {
+    const s = await setup();
+    await linkWithMigration(s);
+    const p0 = (
+      (await s.app.inject({ url: `/sessions/${s.id}/privacy`, headers: auth })).json() as {
+        privacy: PrivacyState;
+      }
+    ).privacy;
+    const target = p0.rows.find((r) => r.messages > 0)!;
+    await post(s, '/privacy', {
+      active: true,
+      reviewIncluded: true,
+      decisions: { [target.phone]: 'excluir' },
+    });
+    expect((await post(s, '/ventaplay/validate', { token: ORG_KEY })).statusCode).toBe(200);
+    const noAprobado = await post(s, '/ventaplay/import');
+    expect(noAprobado.statusCode).toBe(409);
+    expect((noAprobado.json() as { error: string }).error).toBe('privacy_not_approved');
+
+    const ap = await post(s, '/privacy', { approve: { by: 'Doctora Prueba' } });
+    const approved = (ap.json() as { privacy: PrivacyState }).privacy;
+    expect(approved.approval).toMatchObject({ by: 'Doctora Prueba' });
+    expect(approved.approval!.contactos).toBe(approved.counts.incluidos);
+    const st = (
+      (await s.app.inject({ url: `/sessions/${s.id}/ventaplay`, headers: auth })).json() as {
+        state: VentaPlayState;
+      }
+    ).state;
+    expect(st.privacy).toMatchObject({ active: true, stale: true });
+    const stale = await post(s, '/ventaplay/import');
+    expect((stale.json() as { error: string }).error).toBe('privacy_changed');
+
+    expect((await post(s, '/ventaplay/validate', { token: ORG_KEY })).statusCode).toBe(200);
+    expect((await post(s, '/ventaplay/import')).statusCode).toBe(200);
+    const end = await poll(s, ['done', 'error', 'paused']);
+    expect(end.phase).toBe('done');
+    const real = s.vp.calls.filter((c) => c.body.dry_run === false);
+    const phones = real
+      .filter((c) => c.endpoint === 'import-clients')
+      .flatMap((c) => c.body.items!.map((it) => it.telefono));
+    expect(phones).not.toContain(target.phone);
+    expect(phones.length).toBe(approved.approval!.contactos);
+
+    // un cambio después de aprobar borra la aprobación
+    const again = await post(s, '/privacy', { decisions: { [target.phone]: null } });
+    expect((again.json() as { privacy: PrivacyState }).privacy.approval).toBeNull();
   });
 });

@@ -50,6 +50,8 @@ export interface MigrationItems {
   grupos: number;
   chatsConMensajes: number;
   mensajesFuera: number;
+  /** dejados fuera por el filtro de privacidad (null = sin filtro) */
+  privados: { clientes: number; mensajes: number } | null;
 }
 
 export const FUENTE = 'WA_BRIDGE';
@@ -136,13 +138,26 @@ export function messageText(m: StoredMessage): string | null {
   return text;
 }
 
-export function buildItems(src: MigrationSource, phoneNumberId: string | null): MigrationItems {
+/**
+ * @param exclude números que el filtro de privacidad deja fuera (ni cliente ni mensajes);
+ *   null = filtro apagado
+ */
+export function buildItems(
+  src: MigrationSource,
+  phoneNumberId: string | null,
+  exclude: Set<string> | null = null,
+): MigrationItems {
   const { sessionPhone } = src;
   const clients: ClientItem[] = [];
   const byPhone = new Map<string, string>();
   let sinNumero = 0;
+  const privados = exclude ? { clientes: 0, mensajes: 0 } : null;
   for (const p of src.directory.people) {
     if (p.phone === sessionPhone) continue; // el propio número no es cliente
+    if (privados && p.phone && exclude!.has(p.phone)) {
+      privados.clientes += 1;
+      continue;
+    }
     const c = buildClient(p, sessionPhone, phoneNumberId);
     if (!c) {
       sinNumero += 1;
@@ -160,7 +175,9 @@ export function buildItems(src: MigrationSource, phoneNumberId: string | null): 
     const phone = isGroupJid(chat.jid) ? null : phoneOf(chat.jid);
     const cliente = phone ? byPhone.get(phone) : undefined;
     if (!cliente) {
-      mensajesFuera += chat.messages.length;
+      if (privados && phone && exclude!.has(phone))
+        privados.mensajes += chat.messages.filter((m) => messageText(m)).length;
+      else mensajesFuera += chat.messages.length;
       continue;
     }
     let n = 0;
@@ -189,5 +206,6 @@ export function buildItems(src: MigrationSource, phoneNumberId: string | null): 
     grupos: src.directory.groups.length,
     chatsConMensajes,
     mensajesFuera,
+    privados,
   };
 }
