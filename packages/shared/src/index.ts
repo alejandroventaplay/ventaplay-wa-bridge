@@ -127,6 +127,8 @@ export interface SessionSummary {
   assistant: AssistantSettings | null;
   /** migración a VentaPlay: guarda las conversaciones de este número para importarlas */
   migration: MigrationInfo | null;
+  /** código de vinculación pedido para esta espera de QR (alternativa a escanear) */
+  pairing: PairingCodeInfo | null;
   /** siempre true: este servicio nunca envía mensajes */
   readOnly: true;
 }
@@ -158,6 +160,19 @@ export interface AssistantRequest {
   autoTranscribe?: boolean;
   /** al activar: desvincular y pedir QR nuevo para traer 90 días de historial (por defecto sí) */
   relink?: boolean;
+}
+
+/**
+ * Vincular con código: en vez de escanear el QR, la persona escribe este código en
+ * WhatsApp → Dispositivos vinculados → Vincular un dispositivo → "Vincular con el número
+ * de teléfono". Vale mientras dure la espera del QR.
+ */
+export interface PairingCodeInfo {
+  /** 8 caracteres, formateado XXXX-XXXX */
+  code: string;
+  /** número (solo dígitos) del teléfono que se vincula */
+  phone: string;
+  requestedAt: number;
 }
 
 // ------------------------------------------------------- migración a VentaPlay

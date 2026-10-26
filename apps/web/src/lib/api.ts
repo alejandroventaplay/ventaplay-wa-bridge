@@ -173,6 +173,12 @@ export const api = {
     request<{ metrics: ProjectMetrics }>(
       `/sessions/${id}/projects/${encodeURIComponent(jid)}/metrics${days ? `?days=${days}` : ''}`,
     ).then((r) => r.metrics),
+  /** vincular con código (en vez de escanear el QR) */
+  requestPairingCode: (id: string, phone: string) =>
+    request<{ session: SessionSummary }>(`/sessions/${id}/pairing-code`, {
+      method: 'POST',
+      body: JSON.stringify({ phone }),
+    }).then((r) => r.session),
   /** activa o apaga el modo migración (guardar conversaciones para llevarlas a VentaPlay) */
   setMigration: (id: string, body: MigrationRequest) =>
     request<{ session: SessionSummary }>(`/sessions/${id}/migration`, {

@@ -93,6 +93,7 @@ const ProjectQuery = z.object({
 });
 const ExportQuery = z.object({ modo: z.enum(['util', 'completo']).default('util') });
 const CreateBody = z.object({ label: z.string().trim().max(80).nullish() }).nullish();
+const PairingBody = z.object({ phone: z.string().trim().min(8).max(24) });
 const MigrationBody = z.object({
   enabled: z.boolean(),
   consentBy: z.string().trim().max(120).nullish(),
@@ -428,6 +429,17 @@ export async function buildServer(deps: ServerDeps) {
         'cambio de modo asistente',
       );
       return { session: await manager.setAssistant(id, body) };
+    });
+
+    /** vincular con código (alternativa al QR para quien no tiene el teléfono a mano) */
+    api.post('/sessions/:id/pairing-code', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      const { phone } = PairingBody.parse(req.body ?? {});
+      req.log.info(
+        { session: id, by: req.principal?.email ?? req.principal?.sub },
+        'pedir código de vinculación',
+      );
+      return { session: await manager.requestPairing(id, phone) };
     });
 
     // ------------------------------------------- migración a VentaPlay

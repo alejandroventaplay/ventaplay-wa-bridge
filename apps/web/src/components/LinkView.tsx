@@ -1,5 +1,8 @@
+import { useState } from 'react';
 import {
   CheckCircle2,
+  Copy,
+  KeyRound,
   MoreVertical,
   RefreshCw,
   ScanLine,
@@ -16,10 +19,12 @@ interface Props {
   busy: boolean;
   onNewQr: () => void;
   onSimulateScan?: (() => void) | undefined;
+  /** vincular con código: pide el código de 8 caracteres para ese número */
+  onPairingCode?: ((phone: string) => Promise<void>) | undefined;
 }
 
 /** Pantalla de vinculación: QR con marca VentaPlay + instrucciones. */
-export function LinkView({ session, busy, onNewQr, onSimulateScan }: Props) {
+export function LinkView({ session, busy, onNewQr, onSimulateScan, onPairingCode }: Props) {
   return (
     <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_420px]">
       <div className="card order-2 p-6 sm:p-8 lg:order-1">
@@ -60,6 +65,9 @@ export function LinkView({ session, busy, onNewQr, onSimulateScan }: Props) {
 
       <div className="order-1 lg:order-2">
         <QrCard session={session} busy={busy} onNewQr={onNewQr} />
+        {onPairingCode && ['qr', 'qr_expired', 'starting'].includes(session.status) && (
+          <PairingBox session={session} onRequest={onPairingCode} />
+        )}
         {onSimulateScan && session.status === 'qr' && (
           <button
             className="btn-secondary mt-3 w-full border-dashed text-amber-800"
@@ -206,6 +214,117 @@ function QrCard({
           </p>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Vincular con código: para cuando el teléfono no está al lado del computador */
+function PairingBox({
+  session,
+  onRequest,
+}: {
+  session: SessionSummary;
+  onRequest: (phone: string) => Promise<void>;
+}) {
+  const [phone, setPhone] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const p = session.pairing;
+
+  async function request() {
+    setBusy(true);
+    setError(null);
+    setCopied(false);
+    try {
+      await onRequest(phone);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo pedir el código');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const instructions = p
+    ? [
+        `Código para vincular el WhatsApp: ${p.code}`,
+        '1. Abre WhatsApp → Configuración (o ⋮) → Dispositivos vinculados → Vincular un dispositivo.',
+        '2. Abajo de la cámara toca "Vincular con el número de teléfono".',
+        '3. Escribe el código. Vence en unos 2 minutos.',
+      ].join('\n')
+    : '';
+
+  return (
+    <div className="card mt-3 p-5">
+      <p className="flex items-center gap-2 font-black text-ink">
+        <KeyRound className="size-4 text-violeta" /> ¿El teléfono no está contigo?
+      </p>
+      {p ? (
+        <div className="mt-3 space-y-3">
+          <p
+            className="select-all text-center font-mono text-3xl font-black tracking-[0.2em] text-violeta"
+            aria-label="Código de vinculación"
+          >
+            {p.code}
+          </p>
+          <ol className="list-decimal space-y-1 pl-5 text-sm text-ink-soft">
+            <li>
+              En el teléfono: WhatsApp → <b>Dispositivos vinculados</b> →{' '}
+              <b>Vincular un dispositivo</b>.
+            </li>
+            <li>
+              Abajo de la cámara: <b>Vincular con el número de teléfono</b>.
+            </li>
+            <li>Escribir el código. Vence en unos 2 minutos: si vence, pide otro.</li>
+          </ol>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="btn-primary"
+              onClick={() =>
+                void navigator.clipboard
+                  .writeText(instructions)
+                  .then(() => setCopied(true))
+                  .catch(() => setError('No pude copiar: selecciona el código a mano'))
+              }
+            >
+              <Copy className="size-4" /> {copied ? 'Copiado' : 'Copiar instrucciones'}
+            </button>
+            <button className="btn-secondary" disabled={busy} onClick={() => void request()}>
+              {busy ? <Spinner className="size-4" /> : <RefreshCw className="size-4" />} Otro código
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form
+          className="mt-3 space-y-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void request();
+          }}
+        >
+          <p className="text-sm text-ink-soft">
+            Vincula con un <b>código de 8 letras</b> que se dicta o se manda por WhatsApp, sin
+            escanear.
+          </p>
+          <div className="flex gap-2">
+            <input
+              className="input"
+              type="tel"
+              placeholder="Número del WhatsApp (+56 9 …)"
+              aria-label="Número del WhatsApp a vincular"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+            />
+            <button
+              className="btn-primary shrink-0"
+              disabled={busy || phone.replace(/\D/g, '').length < 8}
+            >
+              {busy ? <Spinner className="size-4" /> : <KeyRound className="size-4" />} Pedir código
+            </button>
+          </div>
+        </form>
+      )}
+      {error && <p className="mt-2 text-xs font-bold text-danger">{error}</p>}
     </div>
   );
 }

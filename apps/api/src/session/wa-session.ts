@@ -28,6 +28,7 @@ import type {
   AssistantSettings,
   MigrationInfo,
   MigrationSettings,
+  PairingCodeInfo,
   ProjectMetrics,
 } from '@wa-bridge/shared';
 import { projectSlug, writeProjectExport } from '../export/project-export.js';
@@ -170,6 +171,8 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   >();
 
   private sock: WaSocketLike | null = null;
+  /** código de vinculación pedido en esta espera de QR */
+  private pairing: PairingCodeInfo | null = null;
   private auth: StoredAuthState | null = null;
   /** sube con cada socket nuevo; los eventos de sockets viejos se ignoran */
   private generation = 0;
@@ -269,6 +272,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       personal: this.personalInfo(),
       assistant: this.assistantSettings(),
       migration: this.migrationInfo(),
+      pairing: this.record.status === 'qr' ? this.pairing : null,
       readOnly: true,
     };
   }
@@ -370,6 +374,37 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   /** guarda ya el registro (tras cambiar el modo asistente) */
   async saveNow(): Promise<void> {
     await this.persist();
+  }
+
+  // ------------------------------------------------------------ vincular con código
+
+  /**
+   * Vincular con código en vez de QR. Abre un intento nuevo (así el código dura toda la
+   * espera, ~2:40) y le pide a WhatsApp un código de 8 caracteres para ese número.
+   */
+  async requestPairing(phoneRaw: string): Promise<PairingCodeInfo> {
+    if (this.record.linked)
+      throw new HttpError(409, 'already_linked', 'Este WhatsApp ya está vinculado');
+    const phone = toPhoneDigits(phoneRaw);
+    if (!phone) throw new HttpError(400, 'bad_phone', 'Escribe el número con código de país');
+    await this.start();
+    const deadline = Date.now() + 25_000;
+    while (!(this.record.status === 'qr' && this.sock) && Date.now() < deadline)
+      await new Promise((r) => setTimeout(r, 200));
+    const sock = this.sock;
+    if (this.record.status !== 'qr' || !sock)
+      throw new HttpError(409, 'not_ready', 'WhatsApp no respondió a tiempo: vuelve a intentarlo');
+    if (!sock.requestPairingCode)
+      throw new HttpError(501, 'unsupported', 'Este conector no permite vincular con código');
+    const raw = (await sock.requestPairingCode(phone)).replace(/[^0-9A-Z]/gi, '').toUpperCase();
+    this.pairing = {
+      code: raw.length === 8 ? `${raw.slice(0, 4)}-${raw.slice(4)}` : raw,
+      phone,
+      requestedAt: Date.now(),
+    };
+    this.log.info({ phone: `${phone.slice(0, 5)}…` }, 'código de vinculación pedido');
+    this.touch(true);
+    return this.pairing;
   }
 
   // ------------------------------------------------------------ modo migración
@@ -1675,6 +1710,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
    * credenciales nuevas y emite QR.
    */
   async start(): Promise<void> {
+    this.pairing = null;
     this.stopped = false;
     this.loggingOut = false;
     this.clearReconnect();

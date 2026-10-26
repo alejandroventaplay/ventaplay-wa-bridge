@@ -465,3 +465,33 @@ describe('plan de importación', () => {
     expect(list.map((m) => m.kind)).toEqual(['text', 'deleted']);
   });
 });
+
+describe('vincular con código', () => {
+  it('pide un código de 8 caracteres para el número y desaparece al vincular', async () => {
+    const s = await setup();
+    const r = await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/pairing-code`,
+      headers: auth,
+      payload: { phone: '+56 9 1234 5678' },
+    });
+    expect(r.statusCode).toBe(200);
+    const pairing = (r.json() as { session: SessionSummary }).session.pairing;
+    expect(pairing?.code).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+    expect(pairing?.phone).toBe('56912345678');
+    expect(s.logs.join('')).not.toContain('56912345678');
+
+    const bad = await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/pairing-code`,
+      headers: auth,
+      payload: { phone: 'sin-numero' },
+    });
+    expect(bad.statusCode).toBe(400);
+
+    await waitFor(() => s.manager.get(s.id).status === 'qr', 3000, 'QR');
+    s.sim.scan(s.id);
+    await waitFor(() => s.manager.get(s.id).status === 'connected', 5000, 'vinculado');
+    expect(s.manager.get(s.id).summary().pairing).toBeNull();
+  });
+});

@@ -242,6 +242,7 @@ export function SessionPage() {
             session={session}
             busy={busy}
             onNewQr={() => void run(() => api.connect(id))}
+            onPairingCode={async (phone) => setSession(await api.requestPairingCode(id, phone))}
             onSimulateScan={
               simulator ? () => void run(async () => void (await api.simulateScan(id))) : undefined
             }

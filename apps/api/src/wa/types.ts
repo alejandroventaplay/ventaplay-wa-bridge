@@ -24,6 +24,11 @@ export interface WaSocketLike {
   ): Promise<string | undefined>;
   getBusinessProfile(jid: string): Promise<WABusinessProfile | void>;
   /**
+   * Vincular con código en vez de QR: WhatsApp le avisa al teléfono de ese número y la
+   * persona escribe el código de 8 caracteres. Solo antes de vincular; no escribe en chats.
+   */
+  requestPairingCode?(phoneNumber: string): Promise<string>;
+  /**
    * Solo existe si el dueño habilitó el envío (ALLOW_SEND). Manda un texto y devuelve
    * el mensaje enviado. Todo lo demás del socket sigue bloqueado por el candado.
    */

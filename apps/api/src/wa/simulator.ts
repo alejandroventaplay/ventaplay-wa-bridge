@@ -72,6 +72,12 @@ class SimSocket implements WaSocketLike {
     );
   }
 
+  /** código de vinculación (en el simulador, fijo) */
+  async requestPairingCode(phone: string): Promise<string> {
+    if (!/^\d{8,15}$/.test(phone)) throw new Error('número inválido');
+    return 'K7PD4QXM';
+  }
+
   /** el "teléfono" escanea el QR */
   scan(): void {
     this.clearTimers();

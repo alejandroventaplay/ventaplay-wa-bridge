@@ -119,6 +119,13 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
    * Al activar una sesión ya vinculada se desvincula y se pide un QR nuevo: WhatsApp
    * solo entrega el historial (90 días) al vincular.
    */
+  /** vincular con código: abre un intento nuevo y pide el código para ese número */
+  async requestPairing(id: string, phone: string): Promise<SessionSummary> {
+    const session = this.get(id);
+    await session.requestPairing(phone);
+    return session.summary();
+  }
+
   /**
    * Activa o apaga el modo migración. Al activarlo en una sesión vinculada se desvincula
    * y se pide un QR nuevo: WhatsApp manda el historial solo al escanear.
