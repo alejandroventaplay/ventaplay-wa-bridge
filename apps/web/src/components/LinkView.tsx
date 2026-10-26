@@ -176,9 +176,22 @@ function QrCard({
       <div className="px-6 py-4">
         {status === 'qr' && qr ? (
           <>
-            <div className="flex items-center justify-between text-xs font-bold text-ink-soft">
+            <div className="flex items-center justify-between gap-3 text-xs font-bold text-ink-soft">
               <span>El código se renueva solo</span>
-              <span className="tabular-nums text-ink">{Math.ceil(left / 1000)} s</span>
+              <span className="flex items-center gap-3">
+                {/* el primer código de cada intento dura 60 s; los siguientes, 20 s */}
+                {qr.sequence > 1 && (
+                  <button
+                    className="inline-flex items-center gap-1 text-violeta underline disabled:opacity-50"
+                    onClick={onNewQr}
+                    disabled={busy}
+                    title="Empieza de nuevo con un código que dura 60 segundos"
+                  >
+                    <RefreshCw className="size-3" /> Reiniciar (60 s)
+                  </button>
+                )}
+                <span className="tabular-nums text-ink">{Math.ceil(left / 1000)} s</span>
+              </span>
             </div>
             <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-violeta-5">
               <div
