@@ -11,13 +11,13 @@ import {
   PauseCircle,
   Users,
   Unplug,
-  Workflow,
 } from 'lucide-react';
 import type { SessionSummary, SyncStats, TopChat } from '@wa-bridge/shared';
 import { useNow } from '../hooks/streams';
 import { api, type ExportPreview } from '../lib/api';
 import { fmtAgo, fmtDate, fmtNumber, fmtPhone, fmtSpan } from '../lib/format';
 import { Avatar, Spinner } from './ui';
+import { ConversationsExporter, VentaPlayExporter } from './MigrationPanel';
 
 interface Props {
   session: SessionSummary;
@@ -107,25 +107,15 @@ function Exporters({ session }: { session: SessionSummary }) {
           <Download className="size-5 text-violeta" /> Exportar
         </h3>
         <span className="text-xs font-bold text-ink-soft">
-          Nombres, números y fechas · nunca el contenido de los mensajes
+          {session.migration
+            ? 'Modo migración: incluye las conversaciones'
+            : 'Nombres, números y fechas · nunca el contenido de los mensajes'}
         </span>
       </div>
       <ul className="mt-5 divide-y divide-line">
         <ExcelContactsExporter session={session} disabled={!hasData} />
-        <li className="flex flex-col gap-3 py-4 opacity-60 sm:flex-row sm:items-center">
-          <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-violeta-5 text-violeta">
-            <Workflow className="size-5" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="font-black">Directo a VentaPlay CRM</p>
-            <p className="text-sm text-ink-soft">
-              Crea los clientes en la organización, sin pasar por un archivo.
-            </p>
-          </div>
-          <span className="self-start rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600 sm:self-center">
-            Próximamente
-          </span>
-        </li>
+        {session.migration && <ConversationsExporter session={session} />}
+        <VentaPlayExporter session={session} />
       </ul>
     </section>
   );

@@ -235,6 +235,61 @@ export function protocolAction(
   return null;
 }
 
+/** un mensaje de WhatsApp ya leído: o es contenido para guardar, o borra/edita uno anterior */
+export type ParsedVaultMessage =
+  | { jid: string; action: NonNullable<ReturnType<typeof protocolAction>> }
+  | { jid: string; stored: StoredMessage };
+
+/**
+ * Lee un mensaje de WhatsApp como lo guardan la bóveda y la migración. `serialize` = null
+ * no guarda el original (sin media para descargar después).
+ */
+export function parseVaultMessage(
+  m: MessageLike,
+  serialize: RawSerializer | null,
+): ParsedVaultMessage | null {
+  const jidRaw = m?.key?.remoteJid;
+  const id = m?.key?.id;
+  if (!jidRaw || !id || !m.message) return null;
+  const jid = normalizeJid(jidRaw);
+  if (!isUserJid(jid) && !isGroupJid(jid)) return null;
+
+  const action = protocolAction(m.message);
+  if (action) return { jid, action };
+  const content = extractContent(m.message);
+  if (!content) return null;
+  const ts = toMs(m.messageTimestamp);
+  if (!ts) return null;
+  const key = m.key as { fromMe?: boolean | null; participant?: string | null } & NonNullable<
+    MessageLike['key']
+  >;
+  const group = isGroupJid(jid);
+  const part = group && key.participant ? normalizeJid(key.participant) : null;
+  const partAlt = group && key.participantAlt ? normalizeJid(key.participantAlt) : null;
+  // preferimos el número como autor; el LID queda de alternativo
+  const sender = part && isLidJid(part) && partAlt && !isLidJid(partAlt) ? partAlt : part;
+  const senderAlt = sender === part ? partAlt : part;
+  return {
+    jid,
+    stored: {
+      id,
+      fromMe: Boolean(key.fromMe),
+      ts,
+      kind: content.kind,
+      text: content.text,
+      sender,
+      senderAlt: senderAlt ?? null,
+      pushName: m.pushName ?? null,
+      media: content.media,
+      ...(content.location ? { location: content.location } : {}),
+      raw:
+        content.downloadable && serialize
+          ? serialize({ key: m.key, message: m.message, messageTimestamp: m.messageTimestamp })
+          : null,
+    },
+  };
+}
+
 export class MessageVault {
   private chats = new Map<string, StoredMessage[]>();
   private dirty = new Set<string>();
@@ -249,46 +304,11 @@ export class MessageVault {
   add(messages: MessageLike[]): number {
     let changed = 0;
     for (const m of messages) {
-      const jidRaw = m?.key?.remoteJid;
-      const id = m?.key?.id;
-      if (!jidRaw || !id || !m.message) continue;
-      const jid = normalizeJid(jidRaw);
-      if (!isUserJid(jid) && !isGroupJid(jid)) continue;
-
-      const action = protocolAction(m.message);
-      if (action) {
-        if (this.applyAction(jid, action)) changed += 1;
-        continue;
-      }
-      const content = extractContent(m.message);
-      if (!content) continue;
-      const ts = toMs(m.messageTimestamp);
-      if (!ts) continue;
-      const key = m.key as { fromMe?: boolean | null; participant?: string | null } & NonNullable<
-        MessageLike['key']
-      >;
-      const group = isGroupJid(jid);
-      const part = group && key.participant ? normalizeJid(key.participant) : null;
-      const partAlt = group && key.participantAlt ? normalizeJid(key.participantAlt) : null;
-      // preferimos el número como autor; el LID queda de alternativo
-      const sender = part && isLidJid(part) && partAlt && !isLidJid(partAlt) ? partAlt : part;
-      const senderAlt = sender === part ? partAlt : part;
-      const stored: StoredMessage = {
-        id,
-        fromMe: Boolean(key.fromMe),
-        ts,
-        kind: content.kind,
-        text: content.text,
-        sender,
-        senderAlt: senderAlt ?? null,
-        pushName: m.pushName ?? null,
-        media: content.media,
-        ...(content.location ? { location: content.location } : {}),
-        raw: content.downloadable
-          ? this.serialize({ key: m.key, message: m.message, messageTimestamp: m.messageTimestamp })
-          : null,
-      };
-      if (this.insert(jid, stored)) changed += 1;
+      const p = parseVaultMessage(m, this.serialize);
+      if (!p) continue;
+      if ('action' in p) {
+        if (this.applyAction(p.jid, p.action)) changed += 1;
+      } else if (this.insert(p.jid, p.stored)) changed += 1;
     }
     return changed;
   }

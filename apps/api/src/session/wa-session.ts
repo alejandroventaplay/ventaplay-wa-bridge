@@ -26,6 +26,8 @@ import type {
   HistoryFetchStatus,
   AssistantRequest,
   AssistantSettings,
+  MigrationInfo,
+  MigrationSettings,
   ProjectMetrics,
 } from '@wa-bridge/shared';
 import { projectSlug, writeProjectExport } from '../export/project-export.js';
@@ -60,6 +62,7 @@ import {
   VIEW_WINDOW_DAYS,
   VIEW_WINDOW_MS,
 } from './message-vault.js';
+import { MIGRATION_KEY_PREFIX, MigrationVault } from './migration-vault.js';
 import { SendLimiter } from './send-limiter.js';
 import { type Transcriber, UnsupportedAudioError } from '../transcribe/transcriber.js';
 import { type Directory, isGroupJid, normalizeJid, phoneOf, StatsAggregator } from './stats.js';
@@ -142,6 +145,8 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   private stats: StatsAggregator;
   /** últimos mensajes por chat, solo si es el WhatsApp del dueño ("Mi vista") */
   private vault = new MessageVault((v) => JSON.stringify(v, BufferJSON.replacer));
+  /** modo migración: todas las conversaciones de este número, para llevarlas a VentaPlay */
+  private migration = new MigrationVault();
   private vaultTimer: NodeJS.Timeout | null = null;
   private vaultLoaded = false;
   private mediaCache = new Map<string, { buffer: Buffer; mimetype: string; thumbnail: boolean }>();
@@ -263,6 +268,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       lastError: this.record.lastError,
       personal: this.personalInfo(),
       assistant: this.assistantSettings(),
+      migration: this.migrationInfo(),
       readOnly: true,
     };
   }
@@ -366,6 +372,58 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     await this.persist();
   }
 
+  // ------------------------------------------------------------ modo migración
+
+  /** modo migración con lo que lleva guardado; null = apagado */
+  migrationInfo(): MigrationInfo | null {
+    const m = this.record.migration;
+    if (!m?.enabled) return null;
+    return { ...m, ...this.migration.counts() };
+  }
+
+  get isMigrating(): boolean {
+    return Boolean(this.record.migration?.enabled);
+  }
+
+  /** activa el modo migración (el historial llega al escanear un QR nuevo) */
+  enableMigration(consentBy: string | null, awaitingLink: boolean): void {
+    const prev: MigrationSettings | null = this.record.migration?.enabled
+      ? this.record.migration
+      : null;
+    this.record.migration = {
+      enabled: true,
+      consentBy: consentBy ?? prev?.consentBy ?? null,
+      enabledAt: prev?.enabledAt ?? Date.now(),
+      awaitingLink: prev ? prev.awaitingLink : awaitingLink,
+    };
+    this.log.info({ awaitingLink }, 'modo migración activado');
+    this.touch(true);
+  }
+
+  /** apaga el modo migración y borra las conversaciones guardadas */
+  async disableMigration(): Promise<void> {
+    this.record.migration = null;
+    this.migration = new MigrationVault();
+    const keys = await this.deps.store.listAuthKeys(this.id, MIGRATION_KEY_PREFIX);
+    if (keys.length)
+      await this.deps.store.writeAuth(this.id, Object.fromEntries(keys.map((k) => [k, null])));
+    this.log.info({ borradas: keys.length }, 'modo migración apagado: conversaciones borradas');
+    this.touch(true);
+  }
+
+  /** conversaciones guardadas para migrar, unidas por contacto (LID y número = el mismo chat) */
+  migrationChats(): { jid: string; messages: StoredMessage[] }[] {
+    const out = new Map<string, StoredMessage[]>();
+    for (const [jid, list] of this.migration.entries()) {
+      const key = this.stats.canonicalJid(jid);
+      out.set(key, [...(out.get(key) ?? []), ...list]);
+    }
+    return [...out.entries()].map(([jid, messages]) => ({
+      jid,
+      messages: messages.sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id)),
+    }));
+  }
+
   private personalInfo(): PersonalVaultInfo | null {
     // desvinculado: los mensajes se borraron junto con las credenciales
     if (!this.record.linked || this.ownerState() !== 'yes') return null;
@@ -408,6 +466,9 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     messages: Parameters<MessageVault['add']>[0],
     source: 'history' | 'live' = 'live',
   ): void {
+    // modo migración: se guarda todo, sea o no el número del dueño
+    if (this.record.migration?.enabled && this.migration.add(messages) > 0)
+      this.scheduleVaultPersist();
     const owner = this.ownerState();
     if (owner === 'no') {
       if (this.vault.size) this.vault.clear();
@@ -558,27 +619,38 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
 
   private async persistVault(): Promise<void> {
     if (this.disposed || this.loggingOut || !this.record.linked) return;
-    if (this.ownerState() !== 'yes') {
+    const migrationEntries = this.record.migration?.enabled ? this.migration.takeDirty() : {};
+    let vaultEntries: Record<string, string | null> = {};
+    let archiveEntries: Record<string, string | null> = {};
+    let transcriptEntries: Record<string, string | null> = {};
+    const owner = this.ownerState();
+    if (owner === 'yes') {
+      if (this.stats.summary().state === 'complete') this.vault.prune();
+      vaultEntries = this.vault.takeDirty();
+      archiveEntries = this.archive.takeDirty();
+      transcriptEntries = this.takeDirtyTranscripts();
+    } else if (owner === 'unknown' && this.vault.size) {
       // aún no sabemos el número: reintentamos después
-      if (this.ownerState() === 'unknown' && this.vault.size) this.scheduleVaultPersist();
-      return;
+      this.scheduleVaultPersist();
     }
-    if (this.stats.summary().state === 'complete') this.vault.prune();
-    const vaultEntries = this.vault.takeDirty();
-    const archiveEntries = this.archive.takeDirty();
-    const transcriptEntries = this.takeDirtyTranscripts();
-    const entries = { ...vaultEntries, ...archiveEntries, ...transcriptEntries };
+    const entries = {
+      ...migrationEntries,
+      ...vaultEntries,
+      ...archiveEntries,
+      ...transcriptEntries,
+    };
     const keys = Object.keys(entries);
     if (!keys.length) return;
     try {
       await this.deps.store.writeAuth(this.id, entries);
       this.touch();
     } catch (err) {
+      this.migration.markDirty(Object.keys(migrationEntries));
       this.vault.markDirty(Object.keys(vaultEntries));
       this.archive.markDirty(Object.keys(archiveEntries));
       for (const k of Object.keys(transcriptEntries))
         this.transcriptsDirty.add(k.slice(TRANSCRIPT_PREFIX.length));
-      this.log.error({ err }, 'no se pudieron guardar los mensajes de "Mi vista"');
+      this.log.error({ err }, 'no se pudieron guardar los mensajes');
       this.scheduleVaultPersist();
     }
   }
@@ -586,6 +658,17 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
   private async loadVault(): Promise<void> {
     if (this.vaultLoaded) return;
     this.vaultLoaded = true;
+    if (this.record.migration?.enabled) {
+      try {
+        const keys = await this.deps.store.listAuthKeys(this.id, MIGRATION_KEY_PREFIX);
+        if (keys.length) {
+          this.migration.load(await this.deps.store.readAuth(this.id, keys));
+          this.log.info(this.migration.counts(), 'conversaciones para migrar cargadas');
+        }
+      } catch (err) {
+        this.log.warn({ err }, 'no se pudieron cargar las conversaciones para migrar');
+      }
+    }
     if (!this.deps.ownerPhone && !this.record.assistant?.enabled) return;
     try {
       const keys = await this.deps.store.listAuthKeys(this.id, VAULT_KEY_PREFIX);
@@ -628,6 +711,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
 
   private resetVault(): void {
     this.vault = new MessageVault((v) => JSON.stringify(v, BufferJSON.replacer));
+    this.migration = new MigrationVault();
     this.transcripts.clear();
     this.transcriptsDirty.clear();
     this.archive = new ChatArchive((v) => JSON.stringify(v, BufferJSON.replacer));
@@ -1841,6 +1925,7 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       this.record.linked = true;
       this.record.connectedAt = Date.now();
       if (this.record.assistant?.awaitingLink) this.record.assistant.awaitingLink = false;
+      if (this.record.migration?.awaitingLink) this.record.migration.awaitingLink = false;
       this.setStatus('connected', { lastError: null });
       void this.loadProfile(sock, this.generation);
       this.armIdleTimer();

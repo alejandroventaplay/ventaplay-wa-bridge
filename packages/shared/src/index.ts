@@ -125,6 +125,8 @@ export interface SessionSummary {
   personal: PersonalVaultInfo | null;
   /** modo asistente de esta sesión; null = respaldo (solo estadísticas, sin contenido) */
   assistant: AssistantSettings | null;
+  /** migración a VentaPlay: guarda las conversaciones de este número para importarlas */
+  migration: MigrationInfo | null;
   /** siempre true: este servicio nunca envía mensajes */
   readOnly: true;
 }
@@ -156,6 +158,104 @@ export interface AssistantRequest {
   autoTranscribe?: boolean;
   /** al activar: desvincular y pedir QR nuevo para traer 90 días de historial (por defecto sí) */
   relink?: boolean;
+}
+
+// ------------------------------------------------------- migración a VentaPlay
+
+/**
+ * Modo migración: con el consentimiento del dueño de los datos, la sesión guarda
+ * (cifradas, en el equipo) todas las conversaciones que lleguen, para exportarlas o
+ * importarlas a VentaPlay. Se borran al desvincular o al apagar el modo.
+ */
+export interface MigrationSettings {
+  enabled: boolean;
+  /** quién autorizó copiar sus contactos y conversaciones */
+  consentBy: string | null;
+  /** epoch ms en que se activó */
+  enabledAt: number | null;
+  /** se activó y falta escanear un QR nuevo para traer el historial */
+  awaitingLink: boolean;
+}
+
+export interface MigrationInfo extends MigrationSettings {
+  /** chats y mensajes guardados para migrar */
+  chats: number;
+  messages: number;
+}
+
+export interface MigrationRequest {
+  enabled: boolean;
+  consentBy?: string | null;
+  /** al activar en una sesión vinculada: desvincular y pedir QR nuevo (por defecto sí) */
+  relink?: boolean;
+}
+
+export interface VentaPlayOrg {
+  id: string | null;
+  nombre: string;
+  subdominio: string | null;
+}
+
+export type VentaPlayPhase =
+  'idle' | 'validating' | 'validated' | 'importing' | 'paused' | 'done' | 'error';
+
+export interface VentaPlayCounts {
+  created: number;
+  updated: number;
+  skipped: number;
+  errors: number;
+}
+
+export interface VentaPlayPlan {
+  /** contactos con número que se mandan como clientes */
+  clientes: number;
+  /** según la prueba en seco: se crean / ya existían (se completan sin pisar) */
+  nuevos: number;
+  existentes: number;
+  /** quedan fuera: sin número (solo LID) */
+  sinNumero: number;
+  /** grupos (no van al CRM) */
+  grupos: number;
+  /** mensajes de chats individuales con un cliente importable */
+  mensajes: number;
+  chatsConMensajes: number;
+  /** mensajes guardados que no se pueden importar (grupos o contacto sin número) */
+  mensajesFuera: number;
+  /** la sesión no guardó conversaciones: solo se importan contactos */
+  soloContactos: boolean;
+  /** filas que ocupa del cupo diario de VentaPlay */
+  filas: number;
+}
+
+export interface VentaPlayState {
+  phase: VentaPlayPhase;
+  org: VentaPlayOrg | null;
+  phoneNumberId: string | null;
+  importId: string | null;
+  plan: VentaPlayPlan | null;
+  step: 'canario' | 'clientes' | 'mensajes' | null;
+  progress: {
+    clientes: { done: number; total: number };
+    mensajes: { done: number; total: number };
+  };
+  result: {
+    clientes: VentaPlayCounts;
+    mensajes: VentaPlayCounts;
+    /** errores y avisos agrupados por código */
+    codes: { code: string; detalle: string; n: number }[];
+  };
+  error: string | null;
+  /** por qué quedó en pausa (p.ej. cupo diario agotado) */
+  pausedReason: string | null;
+  validatedAt: number | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+}
+
+export interface VentaPlayValidateRequest {
+  token: string;
+  /** phone_number_id del WhatsApp de la org al que se asocia el historial */
+  phoneNumberId?: string | null;
 }
 
 // ------------------------------------------------------------- Mi vista (solo el dueño)

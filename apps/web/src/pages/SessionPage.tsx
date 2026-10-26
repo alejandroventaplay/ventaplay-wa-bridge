@@ -22,6 +22,7 @@ import { LinkView } from '../components/LinkView';
 import { MyView } from '../components/MyView';
 import { ProjectView } from '../components/ProjectView';
 import { AssistantOffer, AssistantSettingsDialog } from '../components/AssistantPanel';
+import { MigrationBanner, MigrationOffer } from '../components/MigrationPanel';
 
 type Confirm = 'logout' | 'delete' | 'assistant' | null;
 
@@ -151,7 +152,22 @@ export function SessionPage() {
             busy={busy}
             onReconnect={() => void run(() => api.connect(id))}
           />
-          {!session.assistant && (
+          {session.migration ? (
+            <MigrationBanner
+              session={session}
+              onDisable={async () => setSession(await api.setMigration(id, { enabled: false }))}
+            />
+          ) : (
+            !session.assistant && (
+              <MigrationOffer
+                session={session}
+                onEnable={async (consentBy) =>
+                  setSession(await api.setMigration(id, { enabled: true, consentBy }))
+                }
+              />
+            )
+          )}
+          {!session.assistant && !session.migration && (
             <AssistantOffer
               session={session}
               onEnable={async (req) => setSession(await api.setAssistant(id, req))}
@@ -199,10 +215,26 @@ export function SessionPage() {
               </span>
             </div>
           ) : (
-            !session.assistant && (
+            !session.assistant &&
+            !session.migration && (
               <AssistantOffer
                 session={session}
                 onEnable={async (req) => setSession(await api.setAssistant(id, req))}
+              />
+            )
+          )}
+          {session.migration ? (
+            <MigrationBanner
+              session={session}
+              onDisable={async () => setSession(await api.setMigration(id, { enabled: false }))}
+            />
+          ) : (
+            !session.assistant && (
+              <MigrationOffer
+                session={session}
+                onEnable={async (consentBy) =>
+                  setSession(await api.setMigration(id, { enabled: true, consentBy }))
+                }
               />
             )
           )}

@@ -1,4 +1,10 @@
-import type { AssistantSettings, SessionStatus, SyncStats, WaProfile } from '@wa-bridge/shared';
+import type {
+  AssistantSettings,
+  MigrationSettings,
+  SessionStatus,
+  SyncStats,
+  WaProfile,
+} from '@wa-bridge/shared';
 import type { StatsSnapshot } from '../session/stats.js';
 
 /** Lo que persistimos de cada sesión (siempre cifrado en reposo). */
@@ -19,6 +25,8 @@ export interface SessionRecord {
   lastError: string | null;
   /** modo asistente (ausente en registros antiguos = respaldo, salvo OWNER_PHONE heredado) */
   assistant?: AssistantSettings | null;
+  /** modo migración a VentaPlay (ausente = apagado) */
+  migration?: MigrationSettings | null;
 }
 
 /**

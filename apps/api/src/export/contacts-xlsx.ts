@@ -1,6 +1,6 @@
 import ExcelJS from 'exceljs';
 import type { SessionSummary } from '@wa-bridge/shared';
-import { StatsAggregator, type Directory } from '../session/stats.js';
+import { StatsAggregator, type Directory, type DirectoryPerson } from '../session/stats.js';
 
 /** util = solo con nombre y celular (para el CRM) · completo = todo lo que llegó */
 export type ContactsExportMode = 'util' | 'completo';
@@ -8,7 +8,7 @@ export type ContactsExportMode = 'util' | 'completo';
 /** zona horaria en que mostramos las fechas del Excel */
 const TZ = 'America/Santiago';
 const VIOLETA = 'FF450693';
-const DATE_FMT = 'dd-mm-yyyy hh:mm';
+export const DATE_FMT = 'dd-mm-yyyy hh:mm';
 
 /**
  * Excel guarda fechas "de reloj" sin zona horaria: convertimos el instante a la
@@ -39,9 +39,17 @@ export function toLocalExcelDate(ms: number | null, timeZone = TZ): Date | null 
 /** +56912345678 (E.164, listo para importar) */
 export const e164 = (phone: string | null) => (phone ? `+${phone}` : null);
 
+/**
+ * ID con que se unen el Excel de contactos y el de conversaciones (y la importación a
+ * VentaPlay): el número sin "+" si lo conocemos; si no, el ID interno (LID).
+ */
+export const contactIdOf = (jid: string | null | undefined): string | null =>
+  jid ? (jid.split('@')[0] ?? null) : null;
+export const personId = (p: DirectoryPerson) => p.phone ?? contactIdOf(p.lid ?? p.jid);
+
 const yesNo = (v: boolean | null) => (v === null ? null : v ? 'Sí' : 'No');
 
-function styleHeader(ws: ExcelJS.Worksheet): void {
+export function styleHeader(ws: ExcelJS.Worksheet): void {
   const header = ws.getRow(1);
   header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
   header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: VIOLETA } };
@@ -82,6 +90,7 @@ export async function buildContactsWorkbook(input: ContactsExportInput): Promise
     { header: 'Primer mensaje', key: 'first', width: 17 },
     { header: 'Último mensaje', key: 'last', width: 17 },
     ...(mode === 'completo' ? [{ header: 'ID de WhatsApp', key: 'jid', width: 34 }] : []),
+    { header: 'ID contacto', key: 'cid', width: 20 },
   ];
   for (const p of people) {
     contacts.addRow({
@@ -95,9 +104,11 @@ export async function buildContactsWorkbook(input: ContactsExportInput): Promise
       first: toLocalExcelDate(p.firstMessageAt),
       last: toLocalExcelDate(p.lastMessageAt),
       jid: p.phone ? p.jid : (p.lid ?? p.jid),
+      cid: personId(p),
     });
   }
   contacts.getColumn('phone').numFmt = '@';
+  contacts.getColumn('cid').numFmt = '@';
   contacts.getColumn('first').numFmt = DATE_FMT;
   contacts.getColumn('last').numFmt = DATE_FMT;
   styleHeader(contacts);

@@ -5,6 +5,8 @@ import { z } from 'zod';
 import type { SessionStreamEvent, SessionSummary } from '@wa-bridge/shared';
 import type { Config } from '../config.js';
 import { buildContactsWorkbook, contactsFileName } from '../export/contacts-xlsx.js';
+import { buildConversationsWorkbook, conversationsFileName } from '../export/conversations-xlsx.js';
+import { VentaPlayService } from '../ventaplay/service.js';
 import { HttpError, type SessionManager } from '../session/manager.js';
 import { StatsAggregator } from '../session/stats.js';
 import { openFolder } from '../dev/open-folder.js';
@@ -37,6 +39,8 @@ export interface ServerDeps {
   openFolder?: (dir: string) => void;
   /** carpeta del proyecto (para los descargables); por defecto se busca desde el cwd */
   repoRoot?: string | null;
+  /** para tests: importación a VentaPlay con fetch simulado */
+  ventaplay?: VentaPlayService;
 }
 
 const IdParams = z.object({ id: z.string().uuid() });
@@ -89,10 +93,31 @@ const ProjectQuery = z.object({
 });
 const ExportQuery = z.object({ modo: z.enum(['util', 'completo']).default('util') });
 const CreateBody = z.object({ label: z.string().trim().max(80).nullish() }).nullish();
+const MigrationBody = z.object({
+  enabled: z.boolean(),
+  consentBy: z.string().trim().max(120).nullish(),
+  relink: z.boolean().optional(),
+});
+const VentaPlayBody = z.object({
+  token: z.string().trim().min(16, 'Pega la API key completa de la organización').max(500),
+  phoneNumberId: z
+    .string()
+    .trim()
+    .regex(/^\d{0,30}$/, 'El phone_number_id son solo números')
+    .nullish(),
+});
 const HEARTBEAT_MS = 20_000;
 
 export async function buildServer(deps: ServerDeps) {
   const { config, manager, auth } = deps;
+  const ventaplay =
+    deps.ventaplay ??
+    new VentaPlayService({
+      getSession: (id) => manager.get(id),
+      logger: deps.logger,
+      // solo para probar contra un VentaPlay local; por defecto, producción
+      baseUrl: process.env.VENTAPLAY_API_URL || undefined,
+    });
   const app = Fastify({
     loggerInstance: deps.logger,
   });
@@ -403,6 +428,87 @@ export async function buildServer(deps: ServerDeps) {
         'cambio de modo asistente',
       );
       return { session: await manager.setAssistant(id, body) };
+    });
+
+    // ------------------------------------------- migración a VentaPlay
+
+    /** activa / apaga el modo migración (guardar las conversaciones de este número) */
+    api.post('/sessions/:id/migration', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      const body = MigrationBody.parse(req.body ?? {});
+      req.log.info(
+        { session: id, enabled: body.enabled, by: req.principal?.email ?? req.principal?.sub },
+        'cambio de modo migración',
+      );
+      return { session: await manager.setMigration(id, body) };
+    });
+
+    /**
+     * Excel de conversaciones (modo migración): hojas Chats y Mensajes unidas al Excel de
+     * contactos por el ID de contacto.
+     */
+    api.get('/sessions/:id/export/conversations.xlsx', async (req, reply) => {
+      const { id } = IdParams.parse(req.params);
+      const session = manager.get(id);
+      if (!session.isMigrating)
+        throw new HttpError(
+          409,
+          'not_migrating',
+          'Activa "Migrar a VentaPlay" y vuelve a escanear el QR para guardar las conversaciones',
+        );
+      const summary = session.summary();
+      const exportedAt = Date.now();
+      const file = await buildConversationsWorkbook({
+        session: summary,
+        directory: await session.directory(),
+        chats: session.migrationChats(),
+        exportedAt,
+      });
+      req.log.info(
+        { session: id, by: req.principal?.email ?? req.principal?.sub, bytes: file.length },
+        'exportación de conversaciones a Excel',
+      );
+      return reply
+        .header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        .header(
+          'content-disposition',
+          `attachment; filename="${conversationsFileName(summary, exportedAt)}"`,
+        )
+        .header('cache-control', 'no-store')
+        .send(file);
+    });
+
+    api.get('/sessions/:id/ventaplay', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      manager.get(id);
+      return { state: ventaplay.state(id) };
+    });
+
+    /** valida la API key de la org y hace la prueba en seco (no escribe nada) */
+    api.post('/sessions/:id/ventaplay/validate', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      const body = VentaPlayBody.parse(req.body ?? {});
+      req.log.info(
+        { session: id, by: req.principal?.email ?? req.principal?.sub },
+        'VentaPlay: validar',
+      );
+      return { state: await ventaplay.validate(id, body) };
+    });
+
+    /** importa (o retoma) en segundo plano; el avance se lee en GET /ventaplay */
+    api.post('/sessions/:id/ventaplay/import', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      req.log.info(
+        { session: id, by: req.principal?.email ?? req.principal?.sub },
+        'VentaPlay: importar',
+      );
+      return { state: ventaplay.start(id) };
+    });
+
+    /** olvida el token y el estado */
+    api.post('/sessions/:id/ventaplay/forget', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      return { state: ventaplay.forget(id) };
     });
 
     // ---------------------------------------------- descargables para compartir

@@ -6,7 +6,7 @@ import type { SessionRecord, SessionStore } from '../store/types.js';
 import type { MediaDownloader, SocketFactory } from '../wa/types.js';
 import { HttpError } from './errors.js';
 import type { Transcriber } from '../transcribe/transcriber.js';
-import type { AssistantRequest } from '@wa-bridge/shared';
+import type { AssistantRequest, MigrationRequest } from '@wa-bridge/shared';
 import { WaSession } from './wa-session.js';
 
 export interface ManagerEvents {
@@ -119,6 +119,31 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
    * Al activar una sesión ya vinculada se desvincula y se pide un QR nuevo: WhatsApp
    * solo entrega el historial (90 días) al vincular.
    */
+  /**
+   * Activa o apaga el modo migración. Al activarlo en una sesión vinculada se desvincula
+   * y se pide un QR nuevo: WhatsApp manda el historial solo al escanear.
+   */
+  async setMigration(id: string, req: MigrationRequest): Promise<SessionSummary> {
+    const session = this.get(id);
+    if (!req.enabled) {
+      await session.disableMigration();
+      await session.saveNow();
+      return session.summary();
+    }
+    if (session.isMigrating) {
+      session.enableMigration(req.consentBy ?? null, false);
+      await session.saveNow();
+      return session.summary();
+    }
+    const relink = req.relink !== false && session.linked;
+    const needsLink = relink || !session.linked;
+    if (relink) await session.logout();
+    session.enableMigration(req.consentBy ?? null, needsLink);
+    await session.saveNow();
+    if (needsLink && session.status !== 'qr') await session.start();
+    return session.summary();
+  }
+
   async setAssistant(id: string, req: AssistantRequest): Promise<SessionSummary> {
     const session = this.get(id);
     if (!req.enabled) {

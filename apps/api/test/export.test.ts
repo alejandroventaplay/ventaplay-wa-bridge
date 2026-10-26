@@ -64,6 +64,7 @@ function summaryOf(s: StatsAggregator): SessionSummary {
     lastError: null,
     personal: null,
     assistant: null,
+    migration: null,
     readOnly: true,
   };
 }

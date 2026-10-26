@@ -1,5 +1,8 @@
 import type {
   AssistantRequest,
+  MigrationRequest,
+  VentaPlayState,
+  VentaPlayValidateRequest,
   HistoryFetchStatus,
   PersonalChatList,
   PersonalChatMessages,
@@ -170,6 +173,29 @@ export const api = {
     request<{ metrics: ProjectMetrics }>(
       `/sessions/${id}/projects/${encodeURIComponent(jid)}/metrics${days ? `?days=${days}` : ''}`,
     ).then((r) => r.metrics),
+  /** activa o apaga el modo migración (guardar conversaciones para llevarlas a VentaPlay) */
+  setMigration: (id: string, body: MigrationRequest) =>
+    request<{ session: SessionSummary }>(`/sessions/${id}/migration`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }).then((r) => r.session),
+  /** Excel de conversaciones (Chats + Mensajes), solo en modo migración */
+  downloadConversationsXlsx: (id: string) => download(`/sessions/${id}/export/conversations.xlsx`),
+  ventaplay: (id: string) =>
+    request<{ state: VentaPlayState }>(`/sessions/${id}/ventaplay`).then((r) => r.state),
+  ventaplayValidate: (id: string, body: VentaPlayValidateRequest) =>
+    request<{ state: VentaPlayState }>(`/sessions/${id}/ventaplay/validate`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }).then((r) => r.state),
+  ventaplayImport: (id: string) =>
+    request<{ state: VentaPlayState }>(`/sessions/${id}/ventaplay/import`, {
+      method: 'POST',
+    }).then((r) => r.state),
+  ventaplayForget: (id: string) =>
+    request<{ state: VentaPlayState }>(`/sessions/${id}/ventaplay/forget`, {
+      method: 'POST',
+    }).then((r) => r.state),
   /** activa, ajusta o desactiva el modo asistente */
   setAssistant: (id: string, body: AssistantRequest) =>
     request<{ session: SessionSummary }>(`/sessions/${id}/assistant`, {
