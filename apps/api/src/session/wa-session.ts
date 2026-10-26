@@ -441,6 +441,24 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     await this.storeSent(key, sent, { conversation: text }, now);
   }
 
+  /**
+   * Guarda un contacto en este WhatsApp (y en la agenda del teléfono si lo permite).
+   * Solo en modo migración (alguien autorizó al vincular) o para el dueño.
+   */
+  async saveContact(phone: string, fullName: string): Promise<void> {
+    if (!this.isMigrating && this.ownerState() !== 'yes')
+      throw new HttpError(403, 'not_allowed', 'Solo en modo migración o en el WhatsApp del dueño');
+    const sock = this.sock;
+    if (!sock?.saveContact || this.record.status !== 'connected')
+      throw new HttpError(409, 'not_connected', 'El WhatsApp no está conectado ahora');
+    const name = fullName.trim();
+    await sock.saveContact(`${phone}@s.whatsapp.net`, {
+      fullName: name,
+      firstName: name.split(/\s+/)[0] ?? name,
+      saveOnPrimaryAddressbook: true,
+    });
+  }
+
   // ------------------------------------------------------------ modo migración
 
   /** modo migración con lo que lleva guardado; null = apagado */
@@ -1851,7 +1869,13 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
         sessionId: this.id,
         auth: this.auth,
         logger: this.log,
-        capabilities: { send: open, mediaRetry: open, historyFetch: open },
+        capabilities: {
+          send: open,
+          mediaRetry: open,
+          historyFetch: open,
+          // crear contactos: solo en modo migración (autorizado al vincular) o el dueño
+          contactWrite: open || this.isMigrating,
+        },
       });
       if (gen !== this.generation || this.stopped) {
         sock.end(undefined);

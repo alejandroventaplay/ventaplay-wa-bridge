@@ -52,6 +52,19 @@ export interface WaSocketLike {
    * después por `messaging-history.set` con syncType ON_DEMAND.
    */
   fetchHistory?(count: number, oldest: HistoryAnchor, oldestTimestampMs: number): Promise<unknown>;
+  /**
+   * Solo en modo migración (con autorización) o para el dueño: crea o edita un contacto en
+   * ese WhatsApp (y, si el teléfono lo permite, en su agenda). No le escribe a nadie.
+   */
+  saveContact?(jid: string, contact: SavedContact): Promise<void>;
+}
+
+/** contacto que se guarda en el WhatsApp de la sesión */
+export interface SavedContact {
+  fullName: string;
+  firstName: string;
+  /** pedirle al teléfono que también lo guarde en su agenda */
+  saveOnPrimaryAddressbook: boolean;
 }
 
 /** grupo recién creado: id, asunto y participantes que quedaron */
@@ -95,6 +108,8 @@ export interface SocketCapabilities {
   send: boolean;
   mediaRetry: boolean;
   historyFetch: boolean;
+  /** crear contactos (modo migración autorizado o dueño) */
+  contactWrite?: boolean;
 }
 
 export type SocketFactory = (opts: SocketFactoryOptions) => Promise<WaSocketLike>;

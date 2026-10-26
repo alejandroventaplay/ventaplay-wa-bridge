@@ -56,6 +56,7 @@ export function createBaileysFactory(opts: BaileysFactoryOptions = {}): SocketFa
       send: Boolean(opts.allowSend),
       mediaRetry: Boolean(opts.allowMediaRetry),
       historyFetch: Boolean(opts.allowHistoryFetch),
+      contactWrite: false,
     };
     const version = opts.version === 'bundled' ? undefined : await resolveVersion(logger);
     const sock = makeWASocket({
@@ -85,7 +86,12 @@ export function createBaileysFactory(opts: BaileysFactoryOptions = {}): SocketFa
     const groupCreate = caps.send ? sock.groupCreate : null;
     const reupload = caps.mediaRetry ? sock.updateMediaMessage : null;
     const history = caps.historyFetch ? sock.fetchMessageHistory : null;
+    const addContact = caps.contactWrite ? sock.addOrEditContact : null;
     const blocked = enforceReadOnly(sock);
+    if (addContact) {
+      // solo crear o editar contactos: borrar contactos sigue bloqueado
+      (sock as unknown as WaSocketLike).saveContact = (jid, c) => addContact(jid, c);
+    }
     if (history) {
       (sock as unknown as WaSocketLike).fetchHistory = (count, oldest, ts) =>
         history(count, { remoteJid: oldest.remoteJid, id: oldest.id, fromMe: oldest.fromMe }, ts);

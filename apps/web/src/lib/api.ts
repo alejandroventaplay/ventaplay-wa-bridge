@@ -2,6 +2,8 @@ import type {
   AssistantRequest,
   PrivacyState,
   PrivacyUpdate,
+  WaContactsStart,
+  WaContactsState,
   MigrationRequest,
   VentaPlayState,
   VentaPlayValidateRequest,
@@ -194,6 +196,21 @@ export const api = {
     }).then((r) => r.session),
   /** Excel de conversaciones (Chats + Mensajes), solo en modo migración */
   downloadConversationsXlsx: (id: string) => download(`/sessions/${id}/export/conversations.xlsx`),
+  /** clientes de VentaPlay → contactos en el WhatsApp de la sesión */
+  waContacts: (id: string) =>
+    request<{ contacts: WaContactsState }>(`/sessions/${id}/ventaplay/contacts`).then(
+      (r) => r.contacts,
+    ),
+  waContactsPlan: (id: string, suffix: string) =>
+    request<{ contacts: WaContactsState }>(`/sessions/${id}/ventaplay/contacts/plan`, {
+      method: 'POST',
+      body: JSON.stringify({ suffix }),
+    }).then((r) => r.contacts),
+  waContactsStart: (id: string, body: WaContactsStart) =>
+    request<{ contacts: WaContactsState }>(`/sessions/${id}/ventaplay/contacts/start`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }).then((r) => r.contacts),
   /** filtro personal / laboral; resumen = sin la lista (solo contadores y aprobación) */
   privacy: (id: string, resumen = false) =>
     request<{ privacy: PrivacyState }>(

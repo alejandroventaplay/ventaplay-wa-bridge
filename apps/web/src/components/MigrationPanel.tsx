@@ -13,7 +13,12 @@ import {
   TriangleAlert,
   Workflow,
 } from 'lucide-react';
-import type { PrivacyState, SessionSummary, VentaPlayState } from '@wa-bridge/shared';
+import type {
+  PrivacyState,
+  SessionSummary,
+  VentaPlayState,
+  WaContactsState,
+} from '@wa-bridge/shared';
 import { api } from '../lib/api';
 import { fmtDateTime, fmtNumber } from '../lib/format';
 import { Dialog, Spinner } from './ui';
@@ -666,6 +671,10 @@ export function VentaPlayExporter({ session }: { session: SessionSummary }) {
           </div>
         )}
 
+        {(saved || phase === 'done') && phase !== 'importing' && linked && (
+          <WaContactsPanel session={session} orgName={saved?.org.nombre ?? state?.org?.nombre} />
+        )}
+
         {phase === 'error' && !plan && state?.error && (
           <p className="text-xs font-bold text-danger">{state.error}</p>
         )}
@@ -720,6 +729,213 @@ export function VentaPlayExporter({ session }: { session: SessionSummary }) {
         )}
       </Dialog>
     </li>
+  );
+}
+
+/**
+ * Lo inverso: los clientes de VentaPlay como contactos en este WhatsApp, con un sufijo
+ * ("Paciente") para saber de dónde vienen. Solo los que no tiene guardados; con autorización.
+ */
+function WaContactsPanel({
+  session,
+  orgName,
+}: {
+  session: SessionSummary;
+  orgName: string | undefined;
+}) {
+  const [st, setSt] = useState<WaContactsState | null>(null);
+  const [suffix, setSuffix] = useState('Paciente');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [ask, setAsk] = useState(false);
+  const [who, setWho] = useState(session.migration?.consentBy ?? '');
+  const [ok, setOk] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .waContacts(session.id)
+      .then((s) => {
+        if (!alive) return;
+        setSt(s);
+        if (s.phase !== 'idle') setSuffix(s.suffix);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [session.id]);
+
+  const phase = st?.phase ?? 'idle';
+  useEffect(() => {
+    if (phase !== 'running' && phase !== 'planning') return;
+    const t = setInterval(() => {
+      api
+        .waContacts(session.id)
+        .then(setSt)
+        .catch(() => {});
+    }, 1500);
+    return () => clearInterval(t);
+  }, [session.id, phase]);
+
+  async function act(fn: () => Promise<WaContactsState>) {
+    setBusy(true);
+    setError(null);
+    try {
+      setSt(await fn());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const plan = st?.plan;
+  const nuevos = plan?.nuevos ?? 0;
+  return (
+    <div className="space-y-3 rounded-xl border border-line p-4 text-sm">
+      <div>
+        <p className="font-black">
+          <ArrowRightLeft className="mr-1 inline size-4 text-violeta" /> Guardar los clientes en
+          este WhatsApp
+        </p>
+        <p className="text-ink-soft">
+          Crea como contacto a los clientes de {orgName ?? 'la organización'} que no tiene
+          guardados, con un texto al final del nombre para saber que vienen de VentaPlay. Los que ya
+          tiene no se tocan.
+        </p>
+      </div>
+
+      {(phase === 'idle' || phase === 'planned' || phase === 'error') && (
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2">
+            <span className="font-bold">Al final del nombre:</span>
+            <input
+              className="input w-36 py-1.5"
+              value={suffix}
+              maxLength={30}
+              onChange={(e) => setSuffix(e.target.value)}
+            />
+          </label>
+          <button
+            className="btn-secondary"
+            disabled={busy}
+            onClick={() => void act(() => api.waContactsPlan(session.id, suffix))}
+          >
+            {busy ? <Spinner className="size-4" /> : <RefreshCw className="size-4" />} Ver cuántos
+          </button>
+        </div>
+      )}
+
+      {phase === 'planning' && (
+        <p className="flex items-center gap-2 font-bold text-ink-soft">
+          <Spinner className="size-4" /> Leyendo los clientes de VentaPlay…
+        </p>
+      )}
+
+      {plan && phase !== 'planning' && (
+        <div className="space-y-2">
+          <p className="text-ink-soft">
+            {fmtNumber(plan.total)} clientes en VentaPlay · {fmtNumber(plan.yaGuardados)} ya están
+            en su WhatsApp · {fmtNumber(plan.yaCreados)} creados antes desde aquí ·{' '}
+            {fmtNumber(plan.sinNumero)} sin número válido.
+          </p>
+          <p className="font-bold">
+            Se crean <span className="text-violeta">{fmtNumber(nuevos)} contactos</span>
+            {plan.ejemplos.length > 0 && (
+              <span className="font-normal text-ink-soft">
+                {' '}
+                (por ejemplo: {plan.ejemplos.map((e) => `“${e}”`).join(', ')})
+              </span>
+            )}
+          </p>
+        </div>
+      )}
+
+      {phase === 'running' && st && (
+        <div className="space-y-2">
+          <Bar label="Contactos" done={st.progress.done} total={st.progress.total} />
+          <p className="flex items-center gap-2 font-bold text-violeta">
+            <Spinner className="size-4" /> Creando contactos, uno por segundo aprox. No cierres el
+            Bridge.
+          </p>
+        </div>
+      )}
+
+      {phase === 'done' && st && (
+        <p className="flex items-start gap-2 font-bold text-green-700">
+          <CircleCheck className="mt-0.5 size-4 shrink-0" /> Listo: {fmtNumber(st.creados)}{' '}
+          contactos creados en su WhatsApp
+          {st.consentBy ? ` (autorizó ${st.consentBy})` : ''}
+          {st.errores ? `, ${fmtNumber(st.errores)} con error` : ''}.
+        </p>
+      )}
+
+      {phase === 'error' && st?.error && (
+        <p className="flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-red-800">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" /> {st.error}
+          {st.creados ? ` (alcanzó a crear ${fmtNumber(st.creados)})` : ''}
+        </p>
+      )}
+
+      {(phase === 'planned' || phase === 'error') && nuevos > 0 && (
+        <button className="btn-primary" disabled={busy} onClick={() => setAsk(true)}>
+          <ShieldCheck className="size-4" />{' '}
+          {phase === 'error' ? 'Reintentar' : `Crear ${fmtNumber(nuevos)} contactos`}
+        </button>
+      )}
+      {error && <p className="text-xs font-bold text-danger">{error}</p>}
+
+      <Dialog
+        open={ask}
+        onClose={() => setAsk(false)}
+        title="Autorizar contactos en este WhatsApp"
+        footer={
+          <>
+            <button className="btn-secondary" onClick={() => setAsk(false)} data-autofocus>
+              Cancelar
+            </button>
+            <button
+              className="btn-primary"
+              disabled={!ok || who.trim().length < 2 || busy}
+              onClick={() => {
+                setAsk(false);
+                setOk(false);
+                void act(() => api.waContactsStart(session.id, { suffix, consentBy: who.trim() }));
+              }}
+            >
+              <ShieldCheck className="size-4" /> Autorizo, crear contactos
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <p>
+            Se van a crear <b>{fmtNumber(nuevos)} contactos</b> en el WhatsApp{' '}
+            <b>{session.label ?? session.profile?.name}</b>, con “{suffix.trim()}” al final del
+            nombre. No se envía ningún mensaje y los contactos que ya tiene no se modifican.
+          </p>
+          <input
+            className="input w-full"
+            placeholder="Quién autoriza (dueña o dueño del WhatsApp)"
+            value={who}
+            onChange={(e) => setWho(e.target.value)}
+          />
+          <label className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              className="mt-1 accent-violeta"
+              checked={ok}
+              onChange={(e) => setOk(e.target.checked)}
+            />
+            <span>
+              Soy la persona dueña de este WhatsApp (o tengo su permiso) y autorizo crear estos
+              contactos.
+            </span>
+          </label>
+        </div>
+      </Dialog>
+    </div>
   );
 }
 

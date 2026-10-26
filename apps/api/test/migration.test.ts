@@ -2,7 +2,12 @@ import { Writable } from 'node:stream';
 import ExcelJS from 'exceljs';
 import pino from 'pino';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { PrivacyState, SessionSummary, VentaPlayState } from '@wa-bridge/shared';
+import type {
+  PrivacyState,
+  SessionSummary,
+  VentaPlayState,
+  WaContactsState,
+} from '@wa-bridge/shared';
 import { loadConfig } from '../src/config.js';
 import { createAuthenticator } from '../src/http/auth.js';
 import { buildServer } from '../src/http/server.js';
@@ -36,12 +41,12 @@ function fakeVentaPlay(
     badKey?: boolean;
     failRealClients?: boolean;
     failRealMessages?: boolean;
-    ambiguousFirstRealClient?: boolean;
+    /** el 2º cliente de cada lote choca con un duplicado del CRM (en seco y de verdad) */
+    ambiguousSecond?: boolean;
   } = {},
 ) {
   const calls: Call[] = [];
   let limited = Boolean(opts.rateLimitMessagesOnce);
-  let ambiguous = Boolean(opts.ambiguousFirstRealClient);
   const reply = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   const fetchFn = (async (url: string | URL, init?: RequestInit) => {
@@ -60,6 +65,18 @@ function fakeVentaPlay(
       limited = false;
       return reply(429, { success: false, code: 'IMPORT_RATE_LIMITED', error: 'cupo' });
     }
+    if (endpoint === 'manage-clients')
+      return reply(200, {
+        success: true,
+        clients: [
+          { telefono: '56990000001', nombre: 'Ana Pérez' },
+          { telefono: '+56 9 9000 0002', nombre: 'Beto Ruiz Paciente' },
+          { telefono: '56990000003', nombre: '' },
+          { telefono: '123', nombre: 'Malo' },
+          { telefono: '56912345678', nombre: 'El propio número' },
+          { telefono: '56990000001', nombre: 'Ana repetida' },
+        ],
+      });
     const items = body.items ?? [];
     if (
       (opts.failRealClients && endpoint === 'import-clients' && !body.dry_run) ||
@@ -74,30 +91,23 @@ function fakeVentaPlay(
           detalle: 'falla de prueba',
         })),
       });
-    if (ambiguous && endpoint === 'import-clients' && !body.dry_run) {
-      ambiguous = false;
-      return reply(200, {
-        success: true,
-        resultados: items.map((it, i) =>
-          i === 0
-            ? {
-                external_id: it.external_id,
-                status: 'error',
-                code: 'AMBIGUOUS_DEDUP',
-                detalle: 'más de un cliente por telefono',
-              }
-            : { external_id: it.external_id, status: 'created', detalle: '' },
-        ),
-      });
-    }
     return reply(200, {
       success: true,
-      resultados: items.map((it, i) => ({
-        external_id: it.external_id,
-        // en clientes, el primero de cada lote "ya existía"
-        status: endpoint === 'import-clients' && i === 0 ? 'updated' : 'created',
-        detalle: body.dry_run ? 'dry-run' : '',
-      })),
+      resultados: items.map((it, i) =>
+        opts.ambiguousSecond && endpoint === 'import-clients' && i === 1
+          ? {
+              external_id: it.external_id,
+              status: 'error',
+              code: 'AMBIGUOUS_DEDUP',
+              detalle: 'más de un cliente por telefono',
+            }
+          : {
+              external_id: it.external_id,
+              // en clientes, el primero de cada lote "ya existía"
+              status: endpoint === 'import-clients' && i === 0 ? 'updated' : 'created',
+              detalle: body.dry_run ? 'dry-run' : '',
+            },
+      ),
     });
   }) as typeof fetch;
   return { calls, fetchFn };
@@ -137,6 +147,7 @@ async function setup(vp = fakeVentaPlay()) {
     logger,
     fetch: vp.fetchFn,
     retryDelayMs: 0,
+    contactPaceMs: 0,
   });
   const app = await buildServer({
     config,
@@ -589,31 +600,6 @@ describe('Directo a VentaPlay: casos borde', () => {
     expect(again.statusCode).toBe(409);
   });
 
-  it('un cliente ambiguo entre los 5 de prueba no frena la importación', async () => {
-    const s = await setup(fakeVentaPlay({ ambiguousFirstRealClient: true }));
-    await linkWithMigration(s);
-    await s.app.inject({
-      method: 'POST',
-      url: `/sessions/${s.id}/ventaplay/validate`,
-      headers: auth,
-      payload: { token: ORG_KEY },
-    });
-    await s.app.inject({
-      method: 'POST',
-      url: `/sessions/${s.id}/ventaplay/import`,
-      headers: auth,
-    });
-    const end = await poll(s, ['done', 'error', 'paused']);
-    expect(end.phase).toBe('done');
-    expect(end.result.clientes.errors).toBe(1);
-    expect(end.result.codes.map((c) => c.code)).toContain('AMBIGUOUS_DEDUP');
-    // los mensajes del cliente ambiguo no se mandan
-    const first = s.vp.calls.find((c) => c.endpoint === 'import-clients' && !c.body.dry_run)!;
-    const bad = first.body.items![0]!.external_id;
-    for (const c of s.vp.calls.filter((x) => x.endpoint === 'import-messages' && !x.body.dry_run))
-      for (const it of c.body.items!) expect(it.cliente_external_id).not.toBe(bad);
-  });
-
   it('si fallan los mensajes de prueba se detiene sin gastar el cupo', async () => {
     const s = await setup(fakeVentaPlay({ failRealMessages: true }));
     await linkWithMigration(s);
@@ -941,5 +927,103 @@ describe('aprobación final del filtro antes de cargar', () => {
     // un cambio después de aprobar borra la aprobación
     const again = await post(s, '/privacy', { decisions: { [target.phone]: null } });
     expect((again.json() as { privacy: PrivacyState }).privacy.approval).toBeNull();
+  });
+});
+
+describe('clientes de VentaPlay → contactos en su WhatsApp', () => {
+  const post = (s: Awaited<ReturnType<typeof setup>>, url: string, payload?: object) =>
+    s.app.inject({ method: 'POST', url: `/sessions/${s.id}${url}`, headers: auth, payload });
+  const state = async (s: Awaited<ReturnType<typeof setup>>) =>
+    (
+      (
+        await s.app.inject({ url: `/sessions/${s.id}/ventaplay/contacts`, headers: auth })
+      ).json() as {
+        contacts: WaContactsState;
+      }
+    ).contacts;
+
+  it('sin token no cuenta; con token crea solo los nuevos con "Paciente" al final y no repite', async () => {
+    const s = await setup();
+    await linkWithMigration(s);
+    const sin = await post(s, '/ventaplay/contacts/plan', {});
+    expect(sin.statusCode).toBe(409);
+    expect((sin.json() as { error: string }).error).toBe('no_token');
+
+    await post(s, '/ventaplay/validate', { token: ORG_KEY });
+    const plan = (
+      (await post(s, '/ventaplay/contacts/plan', { suffix: 'Paciente' })).json() as {
+        contacts: WaContactsState;
+      }
+    ).contacts;
+    expect(plan.phase).toBe('planned');
+    expect(plan.plan).toMatchObject({ total: 6, sinNumero: 1, yaGuardados: 1, nuevos: 3 });
+    expect(plan.plan!.ejemplos).toEqual([
+      'Ana Pérez Paciente',
+      'Beto Ruiz Paciente',
+      '+56990000003 Paciente',
+    ]);
+    // nada escrito todavía
+    expect(Object.keys(s.sim.savedContacts(s.id))).toHaveLength(0);
+
+    const bad = await post(s, '/ventaplay/contacts/start', { suffix: 'Paciente', consentBy: '' });
+    expect(bad.statusCode).toBe(400);
+    expect(
+      (await post(s, '/ventaplay/contacts/start', { suffix: 'Paciente', consentBy: 'Doctora' }))
+        .statusCode,
+    ).toBe(200);
+    let st = await state(s);
+    for (let i = 0; i < 100 && st.phase === 'running'; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      st = await state(s);
+    }
+    expect(st).toMatchObject({ phase: 'done', creados: 3, errores: 0, consentBy: 'Doctora' });
+    const saved = s.sim.savedContacts(s.id);
+    expect(saved['56990000001@s.whatsapp.net']).toEqual({
+      fullName: 'Ana Pérez Paciente',
+      firstName: 'Ana',
+      saveOnPrimaryAddressbook: true,
+    });
+    expect(Object.keys(saved).sort()).toEqual([
+      '56990000001@s.whatsapp.net',
+      '56990000002@s.whatsapp.net',
+      '56990000003@s.whatsapp.net',
+    ]);
+
+    // otra vez: ya creados, no repite
+    const again = (
+      (await post(s, '/ventaplay/contacts/plan', {})).json() as { contacts: WaContactsState }
+    ).contacts;
+    expect(again.plan).toMatchObject({ nuevos: 0, yaCreados: 3 });
+    expect(s.logs.join('')).not.toContain('Ana Pérez');
+  });
+});
+
+describe('canario con un error ya conocido en la prueba en seco', () => {
+  it('un duplicado del CRM que la prueba en seco ya mostraba no detiene la carga', async () => {
+    const s = await setup(fakeVentaPlay({ ambiguousSecond: true }));
+    await linkWithMigration(s);
+    const v = await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/validate`,
+      headers: auth,
+      payload: { token: ORG_KEY },
+    });
+    const st = (v.json() as { state: VentaPlayState }).state;
+    expect(st.result.codes[0]?.code).toBe('AMBIGUOUS_DEDUP');
+    await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/import`,
+      headers: auth,
+    });
+    let end: VentaPlayState | null = null;
+    for (let i = 0; i < 300; i++) {
+      const r = await s.app.inject({ url: `/sessions/${s.id}/ventaplay`, headers: auth });
+      end = (r.json() as { state: VentaPlayState }).state;
+      if (['done', 'error', 'paused'].includes(end.phase)) break;
+      await new Promise((res) => setTimeout(res, 20));
+    }
+    expect(end!.phase).toBe('done');
+    expect(end!.result.clientes.errors).toBeGreaterThan(0);
+    expect(end!.result.mensajes.created).toBeGreaterThan(0);
   });
 });

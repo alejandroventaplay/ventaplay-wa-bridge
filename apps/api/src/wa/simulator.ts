@@ -6,6 +6,7 @@ import {
   type HistoryAnchor,
   type MediaDownloader,
   type OutgoingMedia,
+  type SavedContact,
   type SocketFactory,
   type SocketFactoryOptions,
   SYNC_ON_DEMAND,
@@ -70,6 +71,16 @@ class SimSocket implements WaSocketLike {
     this.later(this.timing.firstQrMs + this.timing.maxQrs * this.timing.qrRotateMs, () =>
       this.close(408, 'QR refs attempts ended'),
     );
+  }
+
+  /** contacto guardado (en el simulador queda en memoria para los tests) */
+  async saveContact(jid: string, contact: SavedContact): Promise<void> {
+    if (!this.user) throw new Error('no conectado');
+    if (this.opts.capabilities && !this.opts.capabilities.contactWrite)
+      throw new Error('bloqueado por el candado de solo lectura');
+    const list = simSavedContacts.get(this.opts.sessionId) ?? {};
+    list[jid] = contact;
+    simSavedContacts.set(this.opts.sessionId, list);
   }
 
   /** código de vinculación (en el simulador, fijo) */
@@ -268,7 +279,11 @@ export interface Simulator {
   scan(sessionId: string): boolean;
   /** "descarga" la media falsa de los mensajes del simulador */
   downloadMedia: MediaDownloader;
+  /** contactos que la sesión guardó en "su" WhatsApp */
+  savedContacts(sessionId: string): Record<string, SavedContact>;
 }
+
+const simSavedContacts = new Map<string, Record<string, SavedContact>>();
 
 export function createSimulator(timing: Partial<Timing> = {}): Simulator {
   const t = { ...DEFAULT_TIMING, ...timing };
@@ -303,6 +318,7 @@ export function createSimulator(timing: Partial<Timing> = {}): Simulator {
       sock.scan();
       return true;
     },
+    savedContacts: (sessionId) => ({ ...(simSavedContacts.get(sessionId) ?? {}) }),
     downloadMedia: async (raw, opts) => {
       // media "vencida" en el CDN: solo se baja si el teléfono la vuelve a subir
       if (isExpired(raw)) {

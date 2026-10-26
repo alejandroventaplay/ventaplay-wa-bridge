@@ -101,6 +101,11 @@ const MigrationBody = z.object({
   relink: z.boolean().optional(),
 });
 const ForgetBody = z.object({ token: z.boolean().optional() });
+const ContactsPlanBody = z.object({ suffix: z.string().trim().max(30).optional() });
+const ContactsStartBody = z.object({
+  suffix: z.string().trim().max(30),
+  consentBy: z.string().trim().min(2, 'Falta quién autoriza').max(120),
+});
 const PrivacyBody = z.object({
   active: z.boolean().optional(),
   reviewIncluded: z.boolean().optional(),
@@ -571,6 +576,33 @@ export async function buildServer(deps: ServerDeps) {
         'filtro de privacidad: cambio',
       );
       return { privacy: await ventaplay.setPrivacy(id, body) };
+    });
+
+    /** clientes de VentaPlay → contactos en su WhatsApp: estado */
+    api.get('/sessions/:id/ventaplay/contacts', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      manager.get(id);
+      return { contacts: ventaplay.contactsState(id) };
+    });
+
+    /** cuenta cuántos se crearían (no escribe nada) */
+    api.post('/sessions/:id/ventaplay/contacts/plan', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      manager.get(id);
+      const { suffix } = ContactsPlanBody.parse(req.body ?? {});
+      return { contacts: await ventaplay.contactsPlan(id, suffix ?? 'Paciente') };
+    });
+
+    /** crea los contactos con la autorización de la persona dueña del WhatsApp */
+    api.post('/sessions/:id/ventaplay/contacts/start', async (req) => {
+      const { id } = IdParams.parse(req.params);
+      manager.get(id);
+      const body = ContactsStartBody.parse(req.body ?? {});
+      req.log.info(
+        { session: id, autoriza: body.consentBy, by: req.principal?.email ?? req.principal?.sub },
+        'contactos de VentaPlay → WhatsApp: autorizado',
+      );
+      return { contacts: await ventaplay.contactsStart(id, body) };
     });
 
     api.get('/sessions/:id/ventaplay', async (req) => {

@@ -8,6 +8,8 @@ import type {
   VentaPlaySaved,
   VentaPlayState,
   VentaPlayValidateRequest,
+  WaContactsStart,
+  WaContactsState,
 } from '@wa-bridge/shared';
 import { HttpError } from '../session/errors.js';
 import type { StoredMessage } from '../session/message-vault.js';
@@ -50,6 +52,8 @@ export interface MigrationSessionLike {
   readVentaPlay(key: string): Promise<string | null>;
   writeVentaPlay(entries: Record<string, string | null>): Promise<void>;
   listVentaPlay(prefix: string): Promise<string[]>;
+  /** guarda un contacto en ese WhatsApp (solo modo migración autorizado o dueño) */
+  saveContact(phone: string, fullName: string): Promise<void>;
 }
 
 /** claves en el almacén cifrado de la sesión */
@@ -57,6 +61,48 @@ export const LINK_KEY = 'ventaplay:link';
 export const SENT_KEY = (org: string) => `ventaplay:sent:${org}`;
 /** filtro de privacidad: activo, decisiones a mano */
 export const PRIVACY_KEY = 'ventaplay:privacy';
+/** números creados como contacto en el WhatsApp desde el Bridge, por org (no repetir) */
+export const WACONTACTS_KEY = (org: string) => `ventaplay:wacontacts:${org}`;
+/** tras tantos rechazos seguidos de WhatsApp se detiene */
+const MAX_CONTACT_ERRORS = 5;
+const CLIENTS_PAGE = 1000;
+
+interface ContactsJob {
+  state: WaContactsState;
+  items: { phone: string; nombre: string }[];
+  orgKey: string;
+  running: boolean;
+}
+
+const idleContacts = (): WaContactsState => ({
+  phase: 'idle',
+  org: null,
+  plan: null,
+  suffix: 'Paciente',
+  consentBy: null,
+  progress: { done: 0, total: 0 },
+  creados: 0,
+  errores: 0,
+  error: null,
+  startedAt: null,
+  finishedAt: null,
+});
+
+const normName = (s: string) =>
+  s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+/** "Ana Pérez" + "Paciente" → "Ana Pérez Paciente" (sin repetirlo si ya lo trae) */
+export function contactName(nombre: string, suffix: string): string {
+  const base = nombre.replace(/\s+/g, ' ').trim();
+  const s = suffix.replace(/\s+/g, ' ').trim();
+  if (!s || base.toLowerCase().endsWith(s.toLowerCase())) return base.slice(0, 100);
+  return `${base.slice(0, 99 - s.length)} ${s}`.trim();
+}
 /** cada cuántos lotes se guarda el registro de lo enviado (y siempre al terminar o cortarse) */
 const SAVE_EVERY = 5;
 
@@ -89,6 +135,8 @@ export interface VentaPlayDeps {
   baseUrl?: string;
   /** espera entre reintentos (tests: 0) */
   retryDelayMs?: number;
+  /** pausa entre contactos creados en WhatsApp (tests: 0) */
+  contactPaceMs?: number;
 }
 
 interface ApiResult {
@@ -105,6 +153,7 @@ interface ApiResponse {
   error?: string;
   resultados?: ApiResult[];
   organizacion?: { id?: string; nombre?: string; subdominio?: string | null };
+  clients?: { telefono?: string | null; nombre?: string | null }[];
 }
 
 class VpError extends Error {
@@ -170,6 +219,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 export class VentaPlayService {
   private jobs = new Map<string, Job>();
+  private contactJobs = new Map<string, ContactsJob>();
   private links = new Map<string, Link | null>();
   private registries = new Map<string, Registry>();
   private readonly fetchFn: typeof fetch;
@@ -200,6 +250,194 @@ export class VentaPlayService {
     st.saved = await this.savedInfo(id);
     st.previous = st.saved ? [] : await this.previousInfo(id);
     return st;
+  }
+
+  // ------------------------------------------ clientes de VentaPlay → su WhatsApp
+
+  contactsState(id: string): WaContactsState {
+    return structuredClone(this.contactJobs.get(id)?.state ?? idleContacts());
+  }
+
+  /**
+   * Cuenta qué clientes de la org conectada se crearían como contacto en el WhatsApp:
+   * los que no tiene guardados ni se crearon antes desde aquí. No escribe nada.
+   */
+  async contactsPlan(id: string, suffix = 'Paciente'): Promise<WaContactsState> {
+    if (this.contactJobs.get(id)?.running)
+      throw new HttpError(409, 'running', 'Ya se están creando los contactos');
+    const link = await this.link(id);
+    if (!link)
+      throw new HttpError(
+        409,
+        'no_token',
+        'Primero conecta la organización de VentaPlay (pega la API key y valida)',
+      );
+    const session = this.deps.getSession(id);
+    const sessionPhone = (session.summary().profile?.phone ?? '').replace(/\D/g, '');
+    const orgKey = link.org.id ?? link.org.subdominio ?? link.org.nombre;
+    const state = idleContacts();
+    state.phase = 'planning';
+    state.org = link.org;
+    state.suffix = suffix.trim();
+    const job: ContactsJob = { state, items: [], orgKey, running: false };
+    this.contactJobs.set(id, job);
+    try {
+      const clients = await this.listClients(link.token);
+      const directory = await session.directory();
+      const saved = new Set(
+        directory.people
+          .filter((p) => p.phone && (p.savedName || p.inAddressBook))
+          .map((p) => p.phone!),
+      );
+      // contactos guardados de los que WhatsApp no dio el número (solo LID): se comparan
+      // por nombre para no crearle uno repetido
+      const savedNames = new Set(
+        directory.people.filter((p) => !p.phone && p.savedName).map((p) => normName(p.savedName!)),
+      );
+      const created = await this.createdContacts(id, orgKey);
+      const seen = new Set<string>();
+      let sinNumero = 0;
+      let yaGuardados = 0;
+      let yaCreados = 0;
+      for (const c of clients) {
+        const phone = (c.telefono ?? '').replace(/\D/g, '');
+        if (!/^\d{8,15}$/.test(phone)) {
+          sinNumero += 1;
+          continue;
+        }
+        if (seen.has(phone)) continue;
+        seen.add(phone);
+        const nombre = c.nombre?.trim() ?? '';
+        if (
+          phone === sessionPhone ||
+          saved.has(phone) ||
+          (nombre && savedNames.has(normName(nombre)))
+        )
+          yaGuardados += 1;
+        else if (created.has(phone)) yaCreados += 1;
+        else job.items.push({ phone, nombre: c.nombre?.trim() || `+${phone}` });
+      }
+      state.plan = {
+        total: clients.length,
+        sinNumero,
+        yaGuardados,
+        yaCreados,
+        nuevos: job.items.length,
+        ejemplos: job.items.slice(0, 3).map((i) => contactName(i.nombre, state.suffix)),
+      };
+      state.phase = 'planned';
+    } catch (err) {
+      state.phase = 'error';
+      state.error = (err as Error).message;
+    }
+    return this.contactsState(id);
+  }
+
+  /** crea los contactos en el WhatsApp, uno a uno y con pausa; el avance se lee en el estado */
+  async contactsStart(id: string, req: WaContactsStart): Promise<WaContactsState> {
+    const job = this.contactJobs.get(id);
+    if (!job || !job.state.plan || (job.state.phase !== 'planned' && job.state.phase !== 'error'))
+      throw new HttpError(409, 'not_planned', 'Primero revisa cuántos contactos se crearían');
+    if (job.running) return this.contactsState(id);
+    const st = job.state;
+    st.suffix = req.suffix.trim();
+    st.consentBy = req.consentBy.trim();
+    st.phase = 'running';
+    st.error = null;
+    st.progress = { done: 0, total: job.items.length };
+    st.creados = 0;
+    st.errores = 0;
+    st.startedAt = Date.now();
+    st.finishedAt = null;
+    job.running = true;
+    this.deps.logger.info(
+      { session: id, org: st.org?.subdominio, total: job.items.length, autoriza: st.consentBy },
+      'contactos de VentaPlay → WhatsApp: inicio',
+    );
+    void this.runContacts(id, job).finally(() => {
+      job.running = false;
+    });
+    return this.contactsState(id);
+  }
+
+  private async runContacts(id: string, job: ContactsJob): Promise<void> {
+    const st = job.state;
+    const session = this.deps.getSession(id);
+    const pace = this.deps.contactPaceMs ?? 700;
+    const created = await this.createdContacts(id, job.orgKey);
+    let seguidos = 0;
+    let sinGuardar = 0;
+    try {
+      for (const it of job.items) {
+        if (!created.has(it.phone)) {
+          try {
+            await session.saveContact(it.phone, contactName(it.nombre, st.suffix));
+            created.add(it.phone);
+            st.creados += 1;
+            sinGuardar += 1;
+            seguidos = 0;
+          } catch (err) {
+            st.errores += 1;
+            seguidos += 1;
+            if (err instanceof HttpError) throw err;
+            if (seguidos >= MAX_CONTACT_ERRORS)
+              throw new Error(
+                `WhatsApp rechazó ${MAX_CONTACT_ERRORS} contactos seguidos: ${(err as Error).message}`,
+                { cause: err },
+              );
+          }
+          // se anota cada uno al tiro: si el Bridge se corta, al retomar no se repite
+          if (sinGuardar) {
+            await this.saveCreated(id, job.orgKey, created).catch(() => {});
+            sinGuardar = 0;
+          }
+          if (pace) await sleep(pace);
+        }
+        st.progress.done += 1;
+      }
+      st.phase = 'done';
+    } catch (err) {
+      st.phase = 'error';
+      st.error = (err as Error).message;
+    } finally {
+      st.finishedAt = Date.now();
+      await this.saveCreated(id, job.orgKey, created).catch(() => {});
+      this.deps.logger.info(
+        { session: id, creados: st.creados, errores: st.errores, fase: st.phase },
+        'contactos de VentaPlay → WhatsApp: fin',
+      );
+    }
+  }
+
+  private async listClients(token: string) {
+    const out: NonNullable<ApiResponse['clients']> = [];
+    for (let offset = 0; offset < 50_000; offset += CLIENTS_PAGE) {
+      const res = await this.post(token, 'manage-clients', {
+        action: 'list',
+        limit: CLIENTS_PAGE,
+        offset,
+      });
+      const page = res.clients ?? [];
+      out.push(...page);
+      if (page.length < CLIENTS_PAGE) break;
+    }
+    return out;
+  }
+
+  private async createdContacts(id: string, orgKey: string): Promise<Set<string>> {
+    try {
+      const raw = await this.deps.getSession(id).readVentaPlay(WACONTACTS_KEY(orgKey));
+      const list = raw ? (JSON.parse(raw) as unknown) : [];
+      return new Set(Array.isArray(list) ? list.filter((x) => typeof x === 'string') : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  private async saveCreated(id: string, orgKey: string, created: Set<string>): Promise<void> {
+    await this.deps
+      .getSession(id)
+      .writeVentaPlay({ [WACONTACTS_KEY(orgKey)]: JSON.stringify([...created]) });
   }
 
   // ---------------------------------------------------------- filtro de privacidad
@@ -715,9 +953,13 @@ export class VentaPlayService {
         await this.maybeSave(id, job);
         job.cursor.clients += batch.length;
         state.progress.clientes.done = job.cursor.clients;
-        // el canario frena solo si fallan TODOS (token, API o formato roto); un cliente con
-        // datos propios malos (p.ej. AMBIGUOUS_DEDUP) se cuenta como error y se sigue
-        if (canary && failed === batch.length) {
+        // la prueba se detiene si fallan todos o si falla alguno que la prueba en seco
+        // daba por bueno; los que ya venían fallando (p. ej. un teléfono duplicado en el
+        // CRM) se informan y se siguen de largo
+        const unexpected = (res.resultados ?? []).filter(
+          (r) => r.status === 'error' && job.predicted.get(r.external_id ?? '') !== 'error',
+        ).length;
+        if (canary && failed && (failed === batch.length || unexpected > 0)) {
           job.blocked = true;
           state.phase = 'error';
           state.error =

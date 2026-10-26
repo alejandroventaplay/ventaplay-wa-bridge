@@ -306,6 +306,44 @@ export interface PrivacyState {
   rows: PrivacyRow[];
 }
 
+// ------------------------------------------------ clientes de VentaPlay → su WhatsApp
+
+export interface WaContactsPlan {
+  /** clientes de la organización en VentaPlay */
+  total: number;
+  /** sin número válido */
+  sinNumero: number;
+  /** ya los tiene guardados en su WhatsApp: no se tocan */
+  yaGuardados: number;
+  /** creados antes desde el Bridge */
+  yaCreados: number;
+  /** se crean ahora */
+  nuevos: number;
+  /** cómo quedan los nombres (primeros 3) */
+  ejemplos: string[];
+}
+
+export interface WaContactsState {
+  phase: 'idle' | 'planning' | 'planned' | 'running' | 'done' | 'error';
+  org: VentaPlayOrg | null;
+  plan: WaContactsPlan | null;
+  /** lo que se agrega al final del nombre ("Paciente") */
+  suffix: string;
+  consentBy: string | null;
+  progress: { done: number; total: number };
+  creados: number;
+  errores: number;
+  error: string | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+}
+
+export interface WaContactsStart {
+  suffix: string;
+  /** quién autoriza crear los contactos en su WhatsApp */
+  consentBy: string;
+}
+
 export interface VentaPlayPrivacyInfo {
   active: boolean;
   approval: PrivacyApproval | null;
