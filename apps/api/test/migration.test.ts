@@ -36,10 +36,12 @@ function fakeVentaPlay(
     badKey?: boolean;
     failRealClients?: boolean;
     failRealMessages?: boolean;
+    ambiguousFirstRealClient?: boolean;
   } = {},
 ) {
   const calls: Call[] = [];
   let limited = Boolean(opts.rateLimitMessagesOnce);
+  let ambiguous = Boolean(opts.ambiguousFirstRealClient);
   const reply = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   const fetchFn = (async (url: string | URL, init?: RequestInit) => {
@@ -72,6 +74,22 @@ function fakeVentaPlay(
           detalle: 'falla de prueba',
         })),
       });
+    if (ambiguous && endpoint === 'import-clients' && !body.dry_run) {
+      ambiguous = false;
+      return reply(200, {
+        success: true,
+        resultados: items.map((it, i) =>
+          i === 0
+            ? {
+                external_id: it.external_id,
+                status: 'error',
+                code: 'AMBIGUOUS_DEDUP',
+                detalle: 'más de un cliente por telefono',
+              }
+            : { external_id: it.external_id, status: 'created', detalle: '' },
+        ),
+      });
+    }
     return reply(200, {
       success: true,
       resultados: items.map((it, i) => ({
@@ -569,6 +587,31 @@ describe('Directo a VentaPlay: casos borde', () => {
       headers: auth,
     });
     expect(again.statusCode).toBe(409);
+  });
+
+  it('un cliente ambiguo entre los 5 de prueba no frena la importación', async () => {
+    const s = await setup(fakeVentaPlay({ ambiguousFirstRealClient: true }));
+    await linkWithMigration(s);
+    await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/validate`,
+      headers: auth,
+      payload: { token: ORG_KEY },
+    });
+    await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/import`,
+      headers: auth,
+    });
+    const end = await poll(s, ['done', 'error', 'paused']);
+    expect(end.phase).toBe('done');
+    expect(end.result.clientes.errors).toBe(1);
+    expect(end.result.codes.map((c) => c.code)).toContain('AMBIGUOUS_DEDUP');
+    // los mensajes del cliente ambiguo no se mandan
+    const first = s.vp.calls.find((c) => c.endpoint === 'import-clients' && !c.body.dry_run)!;
+    const bad = first.body.items![0]!.external_id;
+    for (const c of s.vp.calls.filter((x) => x.endpoint === 'import-messages' && !x.body.dry_run))
+      for (const it of c.body.items!) expect(it.cliente_external_id).not.toBe(bad);
   });
 
   it('si fallan los mensajes de prueba se detiene sin gastar el cupo', async () => {

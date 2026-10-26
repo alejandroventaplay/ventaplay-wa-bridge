@@ -715,7 +715,9 @@ export class VentaPlayService {
         await this.maybeSave(id, job);
         job.cursor.clients += batch.length;
         state.progress.clientes.done = job.cursor.clients;
-        if (canary && failed) {
+        // el canario frena solo si fallan TODOS (token, API o formato roto); un cliente con
+        // datos propios malos (p.ej. AMBIGUOUS_DEDUP) se cuenta como error y se sigue
+        if (canary && failed === batch.length) {
           job.blocked = true;
           state.phase = 'error';
           state.error =
