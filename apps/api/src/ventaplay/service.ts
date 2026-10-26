@@ -2,6 +2,7 @@ import type { Logger } from 'pino';
 import type {
   VentaPlayCounts,
   VentaPlayOrg,
+  VentaPlayPrevious,
   VentaPlaySaved,
   VentaPlayState,
   VentaPlayValidateRequest,
@@ -37,6 +38,7 @@ export interface MigrationSessionLike {
   /** token y registro, cifrados junto a las credenciales de la sesión */
   readVentaPlay(key: string): Promise<string | null>;
   writeVentaPlay(entries: Record<string, string | null>): Promise<void>;
+  listVentaPlay(prefix: string): Promise<string[]>;
 }
 
 /** claves en el almacén cifrado de la sesión */
@@ -56,6 +58,8 @@ interface Link {
 /** registro de lo que VentaPlay ya aceptó para una org (external_id sin el prefijo común) */
 interface Registry {
   org: string;
+  /** nombre de la org, para mostrarlo aunque no haya token guardado */
+  orgName: string | null;
   prefix: string;
   clients: Set<string>;
   messages: Set<string>;
@@ -134,6 +138,7 @@ const idle = (): VentaPlayState => ({
   pausedReason: null,
   canResume: false,
   saved: null,
+  previous: [],
   validatedAt: null,
   startedAt: null,
   finishedAt: null,
@@ -171,6 +176,7 @@ export class VentaPlayService {
         Boolean(st.plan?.filas) &&
         (st.phase === 'validated' || st.phase === 'paused' || st.phase === 'error');
     st.saved = await this.savedInfo(id);
+    st.previous = st.saved ? [] : await this.previousInfo(id);
     return st;
   }
 
@@ -198,6 +204,7 @@ export class VentaPlayService {
     id: string,
     org: string,
     until: number,
+    orgName: string | null = null,
   ): Promise<{ clientes: number; mensajes: number }> {
     const session = this.deps.getSession(id);
     const summary = session.summary();
@@ -226,6 +233,10 @@ export class VentaPlayService {
       if (ok.has(m.cliente_external_id) && Date.parse(m.created_at) <= until)
         if (this.mark(reg, 'messages', m.external_id)) mensajes += 1;
     reg.lastSyncAt ??= until;
+    if (orgName && reg.orgName !== orgName) {
+      reg.orgName = orgName;
+      reg.dirty = true;
+    }
     await this.saveRegistry(id, reg);
     this.deps.logger.info({ session: id, clientes, mensajes }, 'VentaPlay: registro inicial');
     return { clientes, mensajes };
@@ -276,7 +287,11 @@ export class VentaPlayService {
       const link: Link = { token, phoneNumberId, org, savedAt: Date.now() };
       await session.writeVentaPlay({ [LINK_KEY]: JSON.stringify(link) });
       this.links.set(id, link);
-      const reg = await this.registry(id, orgKey(org), sessionPhone);
+      const reg = await this.registryFor(id, org, sessionPhone);
+      if (reg.orgName !== org.nombre) {
+        reg.orgName = org.nombre;
+        reg.dirty = true;
+      }
       job.registry = reg;
       const mode = req.mode ?? (reg.clients.size || reg.messages.size ? 'actualizar' : 'completo');
       const chats = session.isMigrating ? session.migrationChats() : null;
@@ -379,6 +394,7 @@ export class VentaPlayService {
     const prefix = `wabridge:${sessionPhone}:`;
     const reg: Registry = {
       org,
+      orgName: null,
       prefix,
       clients: new Set(),
       messages: new Set(),
@@ -393,11 +409,13 @@ export class VentaPlayService {
           clients?: string[];
           messages?: string[];
           lastSyncAt?: number | null;
+          orgName?: string | null;
         };
         if (d.prefix === prefix) {
           for (const c of d.clients ?? []) reg.clients.add(c);
           for (const m of d.messages ?? []) reg.messages.add(m);
           reg.lastSyncAt = d.lastSyncAt ?? null;
+          reg.orgName = d.orgName ?? null;
         }
       }
     } catch {
@@ -405,6 +423,27 @@ export class VentaPlayService {
     }
     this.registries.set(key, reg);
     return reg;
+  }
+
+  /**
+   * Registro de una org: se busca por id y, por si acaso, por subdominio o nombre (p. ej.
+   * un registro inicial hecho con otra llave). Lo encontrado queda bajo la llave principal.
+   */
+  private async registryFor(id: string, org: VentaPlayOrg, phone: string): Promise<Registry> {
+    const main = await this.registry(id, orgKey(org), phone);
+    if (main.clients.size || main.messages.size) return main;
+    for (const alt of [org.id, org.subdominio, org.nombre]) {
+      if (!alt || alt === main.org) continue;
+      const other = await this.registry(id, alt, phone);
+      if (!other.clients.size && !other.messages.size) continue;
+      for (const c of other.clients) main.clients.add(c);
+      for (const m of other.messages) main.messages.add(m);
+      main.lastSyncAt = other.lastSyncAt;
+      main.dirty = true;
+      await this.saveRegistry(id, main);
+      break;
+    }
+    return main;
   }
 
   private short(reg: Registry, externalId: string): string {
@@ -429,6 +468,7 @@ export class VentaPlayService {
           clients: [...reg.clients],
           messages: [...reg.messages],
           lastSyncAt: reg.lastSyncAt,
+          orgName: reg.orgName,
         }),
       });
     } catch (err) {
@@ -440,6 +480,36 @@ export class VentaPlayService {
     }
   }
 
+  /**
+   * Lo ya enviado a cada org aunque no haya token guardado (p. ej. importado antes de que
+   * existiera "Actualizar"): así la pantalla no parece vacía y se sabe que validar con la
+   * key de esa org va a mandar solo lo nuevo.
+   */
+  private async previousInfo(id: string): Promise<VentaPlayPrevious[]> {
+    const session = this.deps.getSession(id);
+    const phone = (session.summary().profile?.phone ?? '').replace(/\D/g, '');
+    if (!phone) return [];
+    let keys: string[];
+    try {
+      keys = await session.listVentaPlay(SENT_KEY(''));
+    } catch {
+      return [];
+    }
+    const out: VentaPlayPrevious[] = [];
+    for (const k of keys) {
+      const reg = await this.registry(id, k.slice(SENT_KEY('').length), phone);
+      if (!reg.clients.size && !reg.messages.size) continue;
+      out.push({
+        org: reg.org,
+        orgName: reg.orgName,
+        clientes: reg.clients.size,
+        mensajes: reg.messages.size,
+        lastSyncAt: reg.lastSyncAt,
+      });
+    }
+    return out;
+  }
+
   private async savedInfo(id: string): Promise<VentaPlaySaved | null> {
     let link: Link | null;
     try {
@@ -449,7 +519,7 @@ export class VentaPlayService {
     }
     if (!link) return null;
     const phone = (this.deps.getSession(id).summary().profile?.phone ?? '').replace(/\D/g, '');
-    const reg = phone ? await this.registry(id, orgKey(link.org), phone) : null;
+    const reg = phone ? await this.registryFor(id, link.org, phone) : null;
     return {
       org: link.org,
       phoneNumberId: link.phoneNumberId,

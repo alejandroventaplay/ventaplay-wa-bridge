@@ -356,6 +356,24 @@ export function VentaPlayExporter({ session }: { session: SessionSummary }) {
           </div>
         )}
 
+        {showForm && (state?.previous.length ?? 0) > 0 && (
+          <div className="rounded-xl border border-line bg-slate-50/60 p-4 text-sm text-ink-soft">
+            {state!.previous.map((p) => (
+              <p key={p.org}>
+                <CircleCheck className="mr-1 inline size-4 text-green-700" />
+                Ya enviaste a <b className="text-ink">{p.orgName ?? 'una organización'}</b>{' '}
+                <b className="text-ink">{fmtNumber(p.clientes)}</b> clientes y{' '}
+                <b className="text-ink">{fmtNumber(p.mensajes)}</b> mensajes
+                {p.lastSyncAt ? ` (hasta ${fmtDateTime(p.lastSyncAt)})` : ''}.
+              </p>
+            ))}
+            <p className="mt-1">
+              Pega la API key de esa organización y valida: manda{' '}
+              <b className="text-ink">solo lo nuevo</b>, no empieza de cero.
+            </p>
+          </div>
+        )}
+
         {showForm && (
           <form
             className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,220px)_auto]"

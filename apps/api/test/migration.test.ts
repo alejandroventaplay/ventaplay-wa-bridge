@@ -724,9 +724,42 @@ describe('Actualizar: token guardado y registro de lo enviado', () => {
     expect(r.statusCode).toBe(200);
     const marked = (r.json() as { marcados: { clientes: number; mensajes: number } }).marcados;
     expect(marked.mensajes).toBeGreaterThan(0);
-    const st = await validate(s, { token: ORG_KEY });
+    // sin token guardado, la pantalla igual muestra lo ya enviado
+    const before = (
+      (await s.app.inject({ url: `/sessions/${s.id}/ventaplay`, headers: auth })).json() as {
+        state: VentaPlayState;
+      }
+    ).state;
+    expect(before.saved).toBeNull();
+    expect(before.previous).toEqual([
+      expect.objectContaining({ org: 'org-1', mensajes: marked.mensajes }),
+    ]);
+    const st = await validate(s, { token: ORG_KEY, phoneNumberId: '123' });
     expect(st.plan!.modo).toBe('actualizar');
     expect(st.plan!.filas).toBe(0);
     expect(st.plan!.yaEnviados.mensajes).toBe(marked.mensajes);
+    expect(st.saved?.phoneNumberId).toBe('123');
+  });
+});
+
+describe('Actualizar: registro guardado con otra llave de la org', () => {
+  it('lo encuentra por subdominio y no empieza de cero', async () => {
+    const s = await setup();
+    await linkWithMigration(s);
+    await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/registry/seed`,
+      headers: auth,
+      payload: { org: 'talleralcien', until: Date.now() + 864e5, orgName: 'Javier Sotomayor SPA' },
+    });
+    const r = await s.app.inject({
+      method: 'POST',
+      url: `/sessions/${s.id}/ventaplay/validate`,
+      headers: auth,
+      payload: { token: ORG_KEY },
+    });
+    const st = (r.json() as { state: VentaPlayState }).state;
+    expect(st.plan!.modo).toBe('actualizar');
+    expect(st.plan!.filas).toBe(0);
   });
 });

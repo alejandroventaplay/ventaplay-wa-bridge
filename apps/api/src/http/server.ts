@@ -102,6 +102,7 @@ const MigrationBody = z.object({
 const ForgetBody = z.object({ token: z.boolean().optional() });
 const SeedBody = z.object({
   org: z.string().trim().min(3).max(80),
+  orgName: z.string().trim().max(120).nullish(),
   until: z.number().int().positive(),
 });
 const VentaPlayBody = z.object({
@@ -551,9 +552,9 @@ export async function buildServer(deps: ServerDeps) {
      */
     api.post('/sessions/:id/ventaplay/registry/seed', async (req) => {
       const { id } = IdParams.parse(req.params);
-      const { org, until } = SeedBody.parse(req.body ?? {});
+      const { org, until, orgName } = SeedBody.parse(req.body ?? {});
       req.log.info({ session: id, until }, 'VentaPlay: registro inicial pedido');
-      return { marcados: await ventaplay.seed(id, org, until) };
+      return { marcados: await ventaplay.seed(id, org, until, orgName ?? null) };
     });
 
     // ---------------------------------------------- descargables para compartir

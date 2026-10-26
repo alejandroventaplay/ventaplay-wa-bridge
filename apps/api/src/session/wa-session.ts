@@ -489,6 +489,11 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     return (await this.deps.store.readAuth(this.id, [key])).get(key) ?? null;
   }
 
+  async listVentaPlay(prefix: string): Promise<string[]> {
+    if (!prefix.startsWith('ventaplay:')) throw new Error('clave fuera de ventaplay:');
+    return this.deps.store.listAuthKeys(this.id, prefix);
+  }
+
   async writeVentaPlay(entries: Record<string, string | null>): Promise<void> {
     if (Object.keys(entries).some((k) => !k.startsWith('ventaplay:')))
       throw new Error('clave fuera de ventaplay:');

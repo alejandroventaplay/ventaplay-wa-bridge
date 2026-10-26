@@ -275,9 +275,20 @@ export interface VentaPlayState {
   canResume: boolean;
   /** org conectada (token guardado cifrado en el equipo) y lo ya enviado; null = no hay */
   saved: VentaPlaySaved | null;
+  /** sin token guardado: lo ya enviado antes a cada org (validar con su key = solo lo nuevo) */
+  previous: VentaPlayPrevious[];
   validatedAt: number | null;
   startedAt: number | null;
   finishedAt: number | null;
+}
+
+export interface VentaPlayPrevious {
+  /** id de la org en VentaPlay */
+  org: string;
+  orgName: string | null;
+  clientes: number;
+  mensajes: number;
+  lastSyncAt: number | null;
 }
 
 export interface VentaPlaySaved {
