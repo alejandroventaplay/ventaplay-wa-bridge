@@ -4,6 +4,10 @@
 [![Licencia MIT](https://img.shields.io/badge/licencia-MIT-450693.svg)](LICENSE)
 ![Node 22+](https://img.shields.io/badge/node-%3E%3D22-08c8a7.svg)
 ![MCP](https://img.shields.io/badge/Claude-MCP%20%2B%20skill-8c00ff.svg)
+[![Web](https://img.shields.io/badge/web-ventaplay.com%2Fwhatsapp--claude-340a6c.svg)](https://ventaplay.com/whatsapp-claude)
+
+**🌐 [ventaplay.com/whatsapp-claude](https://ventaplay.com/whatsapp-claude)**: qué es, cómo se ve, cómo
+funciona con Claude y cómo instalarlo en 3 pasos (en español e inglés).
 
 > [!WARNING]
 > **Uso personal y profesional, no empresarial.** El WA Bridge se vincula a tu WhatsApp
@@ -29,7 +33,8 @@ abierto a la comunidad.
 > locally. Read-only by design, with a few explicit, consented exceptions. Code and UI are in
 > Spanish; contributions in any language are welcome. **Personal and professional use only,
 > not for business messaging: campaigns, bulk sends or anything against WhatsApp/Meta
-> policies put your number at HIGH risk of a permanent ban.**
+> policies put your number at HIGH risk of a permanent ban.** Project page in English:
+> [ventaplay.com/whatsapp-claude?lang=en](https://ventaplay.com/whatsapp-claude?lang=en).
 
 ## ¿Por qué existe?
 
