@@ -29,8 +29,9 @@ abierto a la comunidad.
 > pairing code), backs up its history encrypted on your own machine, helps you split
 > personal chats from business ones with a local, reviewable filter, and imports only the
 > business side into a CRM that runs on the official WhatsApp Business Platform. It also
-> ships an MCP connector and a skill so Claude can read, search and summarize your WhatsApp
-> locally. Read-only by design, with a few explicit, consented exceptions. Code and UI are in
+> ships an MCP connector and a skill so Claude can read, search, summarize and reply on your
+> WhatsApp locally. It writes only through explicit, consented doors (every send needs your
+> confirmation). Code and UI are in
 > Spanish; contributions in any language are welcome. **Personal and professional use only,
 > not for business messaging: campaigns, bulk sends or anything against WhatsApp/Meta
 > policies put your number at HIGH risk of a permanent ban.** Project page in English:
@@ -177,9 +178,10 @@ no viene hecho y es buen lugar para contribuir.
 
 ## Privacidad y seguridad por diseño
 
-- **Solo lectura.** Los métodos de escritura de Baileys se bloquean en el socket
-  (`apps/api/src/wa/read-only.ts`); un test y una regla de ESLint vigilan que sigan
-  bloqueados. Las únicas puertas abiertas son explícitas y con consentimiento:
+- **Escribe solo con tu OK.** El Bridge lee y también escribe, pero solo por puertas
+  explícitas y con consentimiento; el resto de los métodos de escritura de Baileys se bloquean
+  en el socket (`apps/api/src/wa/read-only.ts`) y un test y una regla de ESLint vigilan que
+  sigan bloqueados. Las puertas abiertas:
   - enviar, solo en el número del dueño en modo asistente, con confirmación y límites;
   - crear o editar contactos, solo en modo migración (autorizado al vincular) y con la
     autorización de la persona dueña del WhatsApp.
