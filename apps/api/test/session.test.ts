@@ -114,7 +114,9 @@ describe('ciclo de vida con el simulador', () => {
   });
 
   it('respeta el máximo de sesiones activas', async () => {
-    const { manager } = await setup();
+    // QR que dura: con el rápido, en un runner lento los primeros ya vencieron (dejan de
+    // contar como activos) y el cuarto entra
+    const { manager } = await setup(undefined, SCANNABLE);
     await manager.create('1');
     await manager.create('2');
     await manager.create('3');

@@ -953,13 +953,10 @@ export class VentaPlayService {
         await this.maybeSave(id, job);
         job.cursor.clients += batch.length;
         state.progress.clientes.done = job.cursor.clients;
-        // la prueba se detiene si fallan todos o si falla alguno que la prueba en seco
-        // daba por bueno; los que ya venían fallando (p. ej. un teléfono duplicado en el
-        // CRM) se informan y se siguen de largo
-        const unexpected = (res.resultados ?? []).filter(
-          (r) => r.status === 'error' && job.predicted.get(r.external_id ?? '') !== 'error',
-        ).length;
-        if (canary && failed && (failed === batch.length || unexpected > 0)) {
+        // el canario frena solo si fallan TODOS (token, API o formato roto); un cliente con
+        // datos propios malos (p.ej. AMBIGUOUS_DEDUP, teléfono repetido en el CRM) se cuenta
+        // como error, se informa y se sigue; sus mensajes no se mandan
+        if (canary && failed === batch.length) {
           job.blocked = true;
           state.phase = 'error';
           state.error =
