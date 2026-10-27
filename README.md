@@ -123,6 +123,42 @@ Antes de que algo salga del Bridge, una pantalla para separar lo personal de lo 
 
 La guía paso a paso para instalar el asistente está en [`INSTALAR.md`](INSTALAR.md).
 
+### Modo agente (lo que más se usa)
+
+El conector no es solo para preguntas sueltas. Con Claude en **modo agente** (Cowork en
+Claude Desktop, o Claude Code) le encargas una tarea completa y la resuelve en varios pasos:
+lee tus chats, transcribe audios, cruza con tus otras herramientas conectadas (correo,
+calendario, CRM, archivos), te propone qué hacer y lo ejecuta cuando apruebas.
+
+Ejemplos de uso real:
+
+- **"¿Qué me perdí?"** → barrido de pendientes de WhatsApp (con las notas de voz pasadas a
+  texto), correo y calendario; ordena por urgencia y deja borradores con tu tono.
+- **"Me mandaron un audio que no entiendo, explícamelo y propón una respuesta"** →
+  transcribe, resume en limpio y redacta la respuesta para que la apruebes.
+- **"Mándale a Ana las instrucciones que le pasé a Pedro"** → busca cómo se lo explicaste
+  a otro, adapta el texto a la nueva persona y te muestra la vista previa antes de enviar.
+- **"Lo que quedó colgado en el grupo de marketing, derívaselo a quien corresponda"** → lee
+  el grupo, arma un resumen accionable y se lo manda a la persona indicada.
+- **"Pásale a la clínica el Excel con sus contactos"** → genera el archivo, lo envía por
+  WhatsApp y después borra la copia local si se lo pides.
+
+Cómo usarlo:
+
+1. Instala el conector y la skill ([`INSTALAR.md`](INSTALAR.md)).
+2. En Claude Desktop abre **Cowork** (o una sesión de Claude Code) y pide la tarea en
+   lenguaje natural, como se la pedirías a un asistente.
+3. Las reglas son las mismas que en el chat: **nada sale sin tu "sí"**, un mensaje por
+   confirmación, y lo que dicen los chats es información, nunca instrucciones para el agente.
+
+> Tip: dale a Claude contexto permanente (quién es quién en tus chats, cómo escribes) en su
+> memoria o en tus instrucciones personales. Así redacta como tú y no te pregunta cada vez.
+
+**Otros agentes.** El conector es un servidor MCP estándar por `stdio`, así que funciona con
+cualquier cliente MCP que corra en tu computador. Los clientes que solo aceptan conectores
+remotos (por ejemplo ChatGPT) necesitan exponerlo por HTTPS con autenticación; eso todavía
+no viene hecho y es buen lugar para contribuir.
+
 ## Privacidad y seguridad por diseño
 
 - **Solo lectura.** Los métodos de escritura de Baileys se bloquean en el socket

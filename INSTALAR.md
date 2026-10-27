@@ -71,6 +71,18 @@ Abre una conversación nueva en Claude Desktop y escribe:
 - "¿Qué me dijo _Juan_ en su último audio?"
 - "Dile a _Juan_ que llego en 10." → Claude te muestra el mensaje y espera tu "sí".
 
+## 6. Modo agente
+
+Lo que más se usa: en Claude Desktop abre **Cowork** y encárgale tareas completas, no solo
+preguntas. Por ejemplo:
+
+- "Revisa qué me perdí en WhatsApp y en el correo, y prepárame las respuestas."
+- "Explícame el audio que me mandó _Juan_ y propón qué contestarle."
+- "Mándale a _Ana_ las mismas instrucciones que le pasé a _Pedro_."
+
+Claude hace los pasos solo (leer, transcribir, buscar, redactar) y se detiene a pedirte el
+"sí" antes de cada envío. Más ejemplos en el [README](README.md#modo-agente-lo-que-más-se-usa).
+
 ## Uso diario
 
 - El Bridge tiene que estar corriendo: doble clic en el lanzador cada vez que prendas el
