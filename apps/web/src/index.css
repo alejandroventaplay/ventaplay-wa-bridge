@@ -1,4 +1,6 @@
 @import 'tailwindcss';
+/* extensiones locales opcionales (privado/web, no versionada) */
+@source '../../../privado';
 
 /* Tokens de marca tomados del CRM de VentaPlay (crm.ventaplay.com) */
 @theme {

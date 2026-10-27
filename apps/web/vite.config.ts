@@ -4,6 +4,8 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // las extensiones locales (privado/web) usan las mismas copias de estas librerías
+  resolve: { dedupe: ['react', 'react-dom', 'lucide-react'] },
   server: {
     port: 5190,
     strictPort: true,

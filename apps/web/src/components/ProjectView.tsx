@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import type { ArchivedMessage, MessageKind, ProjectInfo, SessionSummary } from '@wa-bridge/shared';
 import { api, openFolderCommand, projectMediaBlob } from '../lib/api';
+import { messageActions } from '../lib/extensions';
 import { fmtAgo, fmtBytes, fmtDateTime, fmtNumber, fmtPhone } from '../lib/format';
 import { Spinner } from './ui';
 import { isPdf, pdfFirstPage } from '../lib/pdfPreview';
@@ -324,6 +325,9 @@ export function ProjectView({ session, jid }: { session: SessionSummary; jid: st
                   </td>
                   <td className="px-4 py-2.5">
                     <Badges m={m} />
+                    {messageActions.map((Action, i) => (
+                      <Action key={i} sessionId={id} jid={jid} m={m} />
+                    ))}
                   </td>
                 </tr>
               ))}
