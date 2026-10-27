@@ -5,6 +5,15 @@
 ![Node 22+](https://img.shields.io/badge/node-%3E%3D22-08c8a7.svg)
 ![MCP](https://img.shields.io/badge/Claude-MCP%20%2B%20skill-8c00ff.svg)
 
+> [!WARNING]
+> **Uso personal y profesional, no empresarial.** El WA Bridge se vincula a tu WhatsApp
+> como un dispositivo más (igual que WhatsApp Web), no por la plataforma oficial de Meta.
+> Si lo usas para **campañas, envíos masivos, mensajes a gente que no te escribió o
+> cualquier cosa que viole las políticas de WhatsApp/Meta, la probabilidad de que te
+> bloqueen el número es ALTA**, y el bloqueo puede ser permanente. Úsalo para tu propio
+> WhatsApp, a tu ritmo, con mensajes uno a uno. Para campañas y atención a escala, usa la
+> API oficial de WhatsApp Business (por ejemplo, a través de un CRM como VentaPlay).
+
 **Respalda un WhatsApp donde se mezcla lo personal con el trabajo, separa lo personal de lo
 laboral y lleva solo lo laboral a un CRM que opera con la plataforma oficial de WhatsApp.**
 De paso, conecta tu WhatsApp con Claude en tu propio computador.
@@ -18,7 +27,9 @@ abierto a la comunidad.
 > business side into a CRM that runs on the official WhatsApp Business Platform. It also
 > ships an MCP connector and a skill so Claude can read, search and summarize your WhatsApp
 > locally. Read-only by design, with a few explicit, consented exceptions. Code and UI are in
-> Spanish; contributions in any language are welcome.
+> Spanish; contributions in any language are welcome. **Personal and professional use only,
+> not for business messaging: campaigns, bulk sends or anything against WhatsApp/Meta
+> policies put your number at HIGH risk of a permanent ban.**
 
 ## ¿Por qué existe?
 

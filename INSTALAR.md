@@ -1,5 +1,10 @@
 # Instalar el WA Bridge y tu asistente de WhatsApp con Claude
 
+> [!WARNING]
+> **Uso personal y profesional, no empresarial.** Si lo usas para campañas, envíos
+> masivos o cualquier cosa que viole las políticas de WhatsApp/Meta, **la probabilidad de
+> que te bloqueen el número es ALTA**. Úsalo para tu propio WhatsApp, con mensajes uno a uno.
+
 Con esto Claude puede leer, buscar y resumir tu WhatsApp, transcribir tus notas de voz y
 (si lo permites) responder por ti, **siempre con tu confirmación**. Todo corre en **tu
 computador**: tus mensajes no se suben a ningún servidor.
