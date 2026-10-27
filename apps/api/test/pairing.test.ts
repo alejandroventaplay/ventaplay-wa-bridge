@@ -65,7 +65,7 @@ async function setup(allowSend: boolean) {
     method: 'POST',
     url: `/sessions/${target}/pairing-code`,
     headers: auth,
-    payload: { phone: '+56 9 4047 8363' },
+    payload: { phone: '+56 9 4000 0001' },
   });
   expect(r.statusCode).toBe(200);
   return { app, manager, agent, target };
@@ -85,7 +85,7 @@ describe('enviar el código de vinculación desde el agente', () => {
     expect(pairing.sentVia).toBeTruthy();
     // quedó en el chat del agente con ese número
     const chat = await app.inject({
-      url: `/sessions/${agent}/personal/chats/${encodeURIComponent('56940478363@s.whatsapp.net')}/messages`,
+      url: `/sessions/${agent}/personal/chats/${encodeURIComponent('56940000001@s.whatsapp.net')}/messages`,
       headers: auth,
     });
     expect(chat.statusCode).toBe(200);

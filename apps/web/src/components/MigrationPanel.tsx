@@ -116,7 +116,7 @@ export function MigrationOffer({
             <input
               id="mig-who"
               className="input"
-              placeholder="Ej: Javier Sotomayor"
+              placeholder="Ej: María González"
               value={who}
               onChange={(e) => setWho(e.target.value)}
               maxLength={120}

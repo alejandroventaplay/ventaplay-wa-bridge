@@ -451,7 +451,7 @@ const RE_PROVEEDOR = matcher(Object.keys(PROVEEDOR));
 export interface ClassifyContext {
   /** nombre del negocio (perfil de WhatsApp): aparece en los mensajes a clientes */
   businessName?: string | null;
-  /** quien autorizó la migración ("Doctora Paula Unda Isamit"): su apellido delata familia */
+  /** quien autorizó la migración ("Doctora Ana Rivas Soto"): su apellido delata familia */
   ownerName?: string | null;
 }
 

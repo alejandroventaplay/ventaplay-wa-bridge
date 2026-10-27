@@ -174,7 +174,7 @@ export async function buildConversationsWorkbook(input: ConversationsExportInput
   return Buffer.concat(chunks);
 }
 
-/** conversaciones-respaldotaller-2026-10-26.xlsx */
+/** conversaciones-taller-demo-2026-10-26.xlsx */
 export function conversationsFileName(session: SessionSummary, exportedAt = Date.now()): string {
   const base = session.label ?? session.profile?.name ?? session.profile?.phone ?? 'whatsapp';
   const slug =

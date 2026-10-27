@@ -75,12 +75,12 @@ describe('filtro de privacidad: clasificación', () => {
   it('el nombre del negocio en los mensajes suma a comercial', () => {
     const c = classify(
       person('56966666666', null),
-      [msg('Gracias por escribir a Clínica Isamit', true)],
+      [msg('Gracias por escribir a Clínica Demo', true)],
       {
-        businessName: 'Clínica Isamit',
+        businessName: 'Clínica Demo',
       },
     );
-    expect(c.reasons.join(' ')).toContain('Clínica Isamit');
+    expect(c.reasons.join(' ')).toContain('Clínica Demo');
   });
 
   it('el pushName (cómo se llama a sí mismo) no cuenta como nombre de agenda', () => {
@@ -112,7 +112,7 @@ describe('filtro de privacidad: decisiones y lista', () => {
     const rows = buildPrivacyRows(
       {
         sessionPhone: '56900000000',
-        businessName: 'Clínica Isamit',
+        businessName: 'Clínica Demo',
         directory: {
           people: [
             person('56911111111', 'Mamá'),
@@ -179,10 +179,10 @@ describe('filtro de privacidad: decisiones y lista', () => {
 
 describe('filtro de privacidad: casos de conversaciones largas', () => {
   it('apellido de quien autorizó → revisar; trato íntimo repetido → privado; muy larga → revisar', () => {
-    const ctx = { ownerName: 'Doctora Paula Unda Isamit' };
-    const fam = classify(person('56910000001', 'pia unda'), [msg('precio del botox')], ctx);
+    const ctx = { ownerName: 'Doctora Ana Rivas Soto' };
+    const fam = classify(person('56910000001', 'pía rivas'), [msg('precio del botox')], ctx);
     expect(fam.category).toBe('revisar');
-    expect(fam.reasons[0]).toContain('unda');
+    expect(fam.reasons[0]).toContain('rivas');
 
     const intimo = Array.from({ length: 5 }, () => msg('te amo mami'));
     expect(classify(person('56910000002', 'Maca'), [...intimo, msg('botox')], ctx).category).toBe(

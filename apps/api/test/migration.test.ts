@@ -61,7 +61,7 @@ function fakeVentaPlay(
     if (endpoint === 'get-organizations')
       return reply(200, {
         success: true,
-        organizacion: { id: 'org-1', nombre: 'Javier Sotomayor SPA', subdominio: 'talleralcien' },
+        organizacion: { id: 'org-1', nombre: 'Taller Demo SpA', subdominio: 'tallerdemo' },
       });
     if (endpoint === 'import-messages' && limited && !body.dry_run) {
       limited = false;
@@ -197,11 +197,11 @@ async function linkWithMigration(s: Awaited<ReturnType<typeof setup>>) {
     method: 'POST',
     url: `/sessions/${s.id}/migration`,
     headers: auth,
-    payload: { enabled: true, consentBy: 'Javier Sotomayor' },
+    payload: { enabled: true, consentBy: 'Juana Pérez' },
   });
   expect(r.statusCode).toBe(200);
   const m = (r.json() as { session: SessionSummary }).session.migration;
-  expect(m).toMatchObject({ enabled: true, consentBy: 'Javier Sotomayor', awaitingLink: true });
+  expect(m).toMatchObject({ enabled: true, consentBy: 'Juana Pérez', awaitingLink: true });
   await waitFor(() => s.manager.get(s.id).status === 'qr', 3000, 'QR');
   s.sim.scan(s.id);
   await waitFor(() => s.manager.get(s.id).summary().stats.state === 'complete', 5000, 'historial');
@@ -334,12 +334,12 @@ describe('Directo a VentaPlay', () => {
       method: 'POST',
       url: `/sessions/${s.id}/ventaplay/validate`,
       headers: auth,
-      payload: { token: ORG_KEY, phoneNumberId: '1361032140419366' },
+      payload: { token: ORG_KEY, phoneNumberId: '100000000000001' },
     });
     expect(v.statusCode).toBe(200);
     const st = (v.json() as { state: VentaPlayState }).state;
     expect(st.phase).toBe('validated');
-    expect(st.org?.subdominio).toBe('talleralcien');
+    expect(st.org?.subdominio).toBe('tallerdemo');
     expect(st.plan!.clientes).toBeGreaterThan(0);
     expect(st.plan!.mensajes).toBeGreaterThan(0);
     expect(st.plan!.soloContactos).toBe(false);
@@ -822,7 +822,7 @@ describe('Actualizar: registro guardado con otra llave de la org', () => {
       method: 'POST',
       url: `/sessions/${s.id}/ventaplay/registry/seed`,
       headers: auth,
-      payload: { org: 'talleralcien', until: Date.now() + 864e5, orgName: 'Javier Sotomayor SPA' },
+      payload: { org: 'tallerdemo', until: Date.now() + 864e5, orgName: 'Taller Demo SpA' },
     });
     const r = await s.app.inject({
       method: 'POST',
