@@ -324,10 +324,12 @@ export function ProjectView({ session, jid }: { session: SessionSummary; jid: st
                     </span>
                   </td>
                   <td className="px-4 py-2.5">
-                    <Badges m={m} />
-                    {messageActions.map((Action, i) => (
-                      <Action key={i} sessionId={id} jid={jid} m={m} />
-                    ))}
+                    <span className="flex items-center gap-1.5">
+                      <Badges m={m} />
+                      {messageActions.map((Action, i) => (
+                        <Action key={i} sessionId={id} jid={jid} m={m} />
+                      ))}
+                    </span>
                   </td>
                 </tr>
               ))}
