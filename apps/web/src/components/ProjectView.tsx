@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import type { ArchivedMessage, MessageKind, ProjectInfo, SessionSummary } from '@wa-bridge/shared';
 import { api, openFolderCommand, projectMediaBlob } from '../lib/api';
-import { messageActions } from '../lib/extensions';
+import { messageActions, projectTools } from '../lib/extensions';
 import { fmtAgo, fmtBytes, fmtDateTime, fmtNumber, fmtPhone } from '../lib/format';
 import { Spinner } from './ui';
 import { isPdf, pdfFirstPage } from '../lib/pdfPreview';
@@ -272,6 +272,9 @@ export function ProjectView({ session, jid }: { session: SessionSummary; jid: st
             ))}
           </select>
         </div>
+        {projectTools.map((Tool, i) => (
+          <Tool key={i} sessionId={id} jid={jid} messages={data.messages} />
+        ))}
         <p className="border-b border-line bg-canvas px-4 py-2 text-xs text-ink-soft">
           {fmtNumber(rows.length)} de {fmtNumber(data.messages.length)} mensajes · del más nuevo al
           más antiguo · clic para ver todos los datos

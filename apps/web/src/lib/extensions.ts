@@ -9,8 +9,18 @@ export interface MessageActionProps {
   m: ArchivedMessage;
 }
 
+/** lo que recibe una herramienta extra sobre la tabla de un proyecto (p.ej. acciones por día) */
+export interface ProjectToolProps {
+  sessionId: string;
+  /** chat o grupo del proyecto */
+  jid: string;
+  /** todos los mensajes cargados del proyecto */
+  messages: ArchivedMessage[];
+}
+
 interface LocalExtension {
   MessageAction?: ComponentType<MessageActionProps>;
+  ProjectTool?: ComponentType<ProjectToolProps>;
 }
 
 /**
@@ -24,3 +34,7 @@ const modules = import.meta.glob<LocalExtension>('../../../../privado/web/*.tsx'
 export const messageActions: ComponentType<MessageActionProps>[] = Object.values(modules)
   .map((mod) => mod.MessageAction)
   .filter((c): c is ComponentType<MessageActionProps> => Boolean(c));
+
+export const projectTools: ComponentType<ProjectToolProps>[] = Object.values(modules)
+  .map((mod) => mod.ProjectTool)
+  .filter((c): c is ComponentType<ProjectToolProps> => Boolean(c));
