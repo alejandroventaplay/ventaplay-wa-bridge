@@ -372,6 +372,18 @@ function StatusNotice({
       </div>
     );
   }
+  if (session.status === 'connected' && session.lastError?.startsWith('Recepción detenida')) {
+    return (
+      <div className="mb-6 flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <TriangleAlert className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1">{session.lastError}</span>
+        <button className="btn-primary py-2" onClick={onReconnect} disabled={busy}>
+          {busy ? <Spinner className="size-4" /> : <RefreshCw className="size-4" />}
+          Reconectar
+        </button>
+      </div>
+    );
+  }
   if (session.status === 'logged_out' || session.status === 'error') {
     return (
       <div

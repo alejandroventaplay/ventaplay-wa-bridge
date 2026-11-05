@@ -33,6 +33,8 @@ export interface SessionManagerOptions {
   /** transcribe notas de voz en el equipo */
   transcriber?: Transcriber | null;
   autoTranscribe?: boolean;
+  /** plazo para que WhatsApp entregue los pendientes al conectar (por defecto 2 min) */
+  pendingTimeoutMs?: number;
 }
 
 /** Dueño de todas las sesiones vivas del proceso. */
@@ -122,7 +124,8 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
   /** Pide un QR nuevo o reintenta la conexión. */
   async connect(id: string): Promise<SessionSummary> {
     const session = this.get(id);
-    if (session.status === 'connected') return session.summary();
+    // conectada pero con la recepción trabada: se puede forzar una reconexión
+    if (session.status === 'connected' && !session.receptionStalled) return session.summary();
     await session.start();
     return session.summary();
   }
@@ -249,6 +252,7 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
       transcriber: this.opts.transcriber ?? null,
       autoTranscribe: this.opts.autoTranscribe ?? false,
       extraRecipients: this.extraRecipients,
+      pendingTimeoutMs: this.opts.pendingTimeoutMs,
     });
     session.on('update', (summary) => this.emit('update', summary));
     this.sessions.set(record.id, session);

@@ -31,6 +31,8 @@ interface Timing {
   maxQrs: number;
   openMs: number;
   batchEveryMs: number;
+  /** como Baileys: avisa que terminó de entregar los pendientes (false = recepción trabada) */
+  pendingNotifications: boolean;
 }
 
 const DEFAULT_TIMING: Timing = {
@@ -39,6 +41,7 @@ const DEFAULT_TIMING: Timing = {
   maxQrs: 6,
   openMs: 900,
   batchEveryMs: 1_200,
+  pendingNotifications: true,
 };
 
 class SimSocket implements WaSocketLike {
@@ -103,6 +106,8 @@ class SimSocket implements WaSocketLike {
   private open(withHistory: boolean): void {
     this.user = { id: '56912345678:7@s.whatsapp.net', name: 'Barbería Demo', lid: DEMO_LID };
     this.emit('connection.update', { connection: 'open' });
+    if (this.timing.pendingNotifications)
+      this.later(10, () => this.emit('connection.update', { receivedPendingNotifications: true }));
     if (!withHistory) return;
     const batches = buildFakeHistory();
     batches.forEach((b, i) => {

@@ -260,3 +260,55 @@ describe('robustez (revisión)', () => {
     expect(await store.getSession(id)).toBeNull();
   });
 });
+
+describe('vigía de recepción', () => {
+  async function linked(pendingNotifications: boolean) {
+    const t = await tempStore();
+    const sim = createSimulator({ ...SCANNABLE, pendingNotifications });
+    const manager = new SessionManager({
+      store: t.store,
+      socketFactory: sim.factory,
+      logger: silentLogger,
+      maxSessions: 3,
+      wipeOnLogout: true,
+      pendingTimeoutMs: 120,
+    });
+    await manager.init();
+    cleanups.push(t.cleanup, () => manager.shutdown());
+    const created = await manager.create('Recepción');
+    const s = manager.get(created.id);
+    await waitFor(() => s.summary().qr, 2000, 'QR');
+    sim.scan(created.id);
+    await waitFor(() => s.status === 'connected', 3000, 'conectado');
+    return { s, manager, id: created.id };
+  }
+
+  it('si WhatsApp entrega los pendientes, no hace nada', async () => {
+    const { s } = await linked(true);
+    await new Promise((r) => setTimeout(r, 400));
+    expect(s.status).toBe('connected');
+    expect(s.summary().lastError).toBeNull();
+    expect(s.receptionStalled).toBe(false);
+  });
+
+  it('si no los entrega, reconecta y, si sigue trabada, lo avisa y deja forzar la reconexión', async () => {
+    const { s, manager, id } = await linked(false);
+    // 1.ª vez: reconecta solo
+    await waitFor(
+      () => s.status === 'reconnecting' && s.summary().lastError?.startsWith('Recepción detenida'),
+      2000,
+      'reconexión por recepción trabada',
+    );
+    // tras dos reconexiones en la hora, queda conectada pero con el aviso
+    await waitFor(() => s.status === 'connected' && s.receptionStalled, 15_000, 'aviso');
+    expect(s.summary().lastError).toMatch(/no están llegando mensajes nuevos/);
+    // "Reconectar" desde la web fuerza un socket nuevo aunque esté conectada
+    const before = s.summary().connectedAt;
+    await manager.connect(id);
+    await waitFor(
+      () => s.status === 'connected' && s.summary().connectedAt !== before,
+      3000,
+      'reconexión forzada',
+    );
+  }, 25_000);
+});

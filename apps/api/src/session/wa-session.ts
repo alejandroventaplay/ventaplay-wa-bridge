@@ -115,7 +115,17 @@ export interface WaSessionDeps {
    * previa, p.ej. el número de un flujo de VentaPlay. Mismos frenos que cualquier envío.
    */
   extraRecipients?: ReadonlySet<string>;
+  /**
+   * si tras conectar WhatsApp no termina de entregar los pendientes en este plazo, la
+   * recepción está trabada: se reconecta (máx. 2 veces por hora) y después se avisa
+   */
+  pendingTimeoutMs?: number;
 }
+
+/** plazo para que WhatsApp termine de entregar los mensajes pendientes al conectar */
+export const PENDING_TIMEOUT_MS = 120_000;
+/** prefijo del aviso de recepción trabada (se borra solo cuando vuelve a recibir) */
+export const RECEPTION_STALLED = 'Recepción detenida';
 
 /** prefijo de las transcripciones guardadas (cifradas, junto a la bóveda) */
 export const TRANSCRIPT_PREFIX = 'transcript:';
@@ -217,6 +227,11 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
 
   get isLinked(): boolean {
     return this.record.linked;
+  }
+
+  /** conectada pero sin recibir: WhatsApp no terminó de entregar los pendientes */
+  get receptionStalled(): boolean {
+    return Boolean(this.record.lastError?.startsWith(RECEPTION_STALLED));
   }
 
   get isActive(): boolean {
@@ -1896,7 +1911,63 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
     }
   }
 
+  // ------------------------------------------------------------------ vigía de recepción
+
+  private pendingTimer: NodeJS.Timeout | null = null;
+  private stalledReconnects: number[] = [];
+  /** generación del socket que ya avisó que entregó los pendientes */
+  private pendingDoneGen = -1;
+
+  /** al conectar, WhatsApp entrega los pendientes y avisa; si no avisa, no llega nada nuevo */
+  private armPendingWatch(sock: WaSocketLike): void {
+    this.clearPendingWatch();
+    const gen = this.generation;
+    if (this.pendingDoneGen === gen) return;
+    const since = Date.now();
+    this.pendingTimer = setTimeout(() => {
+      this.pendingTimer = null;
+      if (gen !== this.generation || this.sock !== sock || this.stopped) return;
+      this.onReceptionStalled(since);
+    }, this.deps.pendingTimeoutMs ?? PENDING_TIMEOUT_MS);
+    this.pendingTimer.unref?.();
+  }
+
+  private clearPendingWatch(): void {
+    if (this.pendingTimer) clearTimeout(this.pendingTimer);
+    this.pendingTimer = null;
+  }
+
+  private receptionOk(): void {
+    this.pendingDoneGen = this.generation;
+    this.clearPendingWatch();
+    if (this.record.lastError?.startsWith(RECEPTION_STALLED))
+      this.setStatus(this.record.status, { lastError: null });
+  }
+
+  private onReceptionStalled(since: number, now = Date.now()): void {
+    this.stalledReconnects = this.stalledReconnects.filter((t) => t > now - 3_600_000);
+    this.log.warn(
+      { retries: this.stalledReconnects.length },
+      'recepción detenida: WhatsApp no terminó de entregar los mensajes pendientes',
+    );
+    if (this.stalledReconnects.length < 2) {
+      this.stalledReconnects.push(now);
+      this.closeSocket();
+      this.scheduleReconnect(`${RECEPTION_STALLED}: reconectando para recibir los pendientes`);
+      return;
+    }
+    const hora = new Date(since).toLocaleTimeString('es-CL', {
+      timeZone: 'America/Santiago',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    this.setStatus(this.record.status, {
+      lastError: `${RECEPTION_STALLED} desde las ${hora}: WhatsApp no terminó de entregar los mensajes pendientes, así que no están llegando mensajes nuevos. Reconecta o vuelve a vincular.`,
+    });
+  }
+
   private closeSocket(bump = true): void {
+    this.clearPendingWatch();
     if (bump) this.generation++;
     const sock = this.sock;
     this.sock = null;
@@ -2039,7 +2110,10 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       this.setStatus('connecting');
     }
 
+    if (u.receivedPendingNotifications === true) this.receptionOk();
+
     if (u.connection === 'open') {
+      this.armPendingWatch(sock);
       this.attempts = 0;
       this.badSessionStreak = 0;
       this.qr = null;
