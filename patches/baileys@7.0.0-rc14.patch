@@ -1,0 +1,49 @@
+diff --git a/lib/Socket/socket.js b/lib/Socket/socket.js
+index ae34a8f315a0b9fd101472cc69e59624c6c63861..b8639be65e2e4e273c55ee31d31842028f6256b9 100644
+--- a/lib/Socket/socket.js
++++ b/lib/Socket/socket.js
+@@ -802,13 +802,30 @@ export const makeSocket = (config) => {
+     ws.on('CB:ib,,downgrade_webclient', () => {
+         void end(new Boom('Multi-device beta not joined', { statusCode: DisconnectReason.multideviceMismatch }));
+     });
++    // [wa-bridge] pide lotes de pendientes hasta que llegue <offline>; con un solo pedido
++    // las cuentas con muchos pendientes quedaban sin recibir nada nuevo
++    let offlineDone = false;
++    let offlineBatchTimer = null;
+     ws.on('CB:ib,,offline_preview', async (node) => {
+-        logger.info('offline preview received', JSON.stringify(node));
+-        await sendNode({
++        logger.info({ preview: node.content?.[0]?.attrs ?? node.attrs }, 'offline preview received');
++        const askBatch = () => sendNode({
+             tag: 'ib',
+             attrs: {},
+             content: [{ tag: 'offline_batch', attrs: { count: '100' } }]
+         });
++        await askBatch();
++        let tries = 0;
++        if (offlineBatchTimer)
++            clearInterval(offlineBatchTimer);
++        offlineBatchTimer = setInterval(() => {
++            if (offlineDone || ws.isClosed || ws.isClosing || ++tries > 120) {
++                clearInterval(offlineBatchTimer);
++                offlineBatchTimer = null;
++                return;
++            }
++            logger.info({ tries }, 'pidiendo otro lote de pendientes');
++            askBatch().catch(err => logger.warn({ err: err?.message }, 'no se pudo pedir otro lote de pendientes'));
++        }, 5000);
+     });
+     ws.on('CB:ib,,edge_routing', (node) => {
+         const edgeRoutingNode = getBinaryNodeChild(node, 'edge_routing');
+@@ -830,6 +847,11 @@ export const makeSocket = (config) => {
+     });
+     // called when all offline notifs are handled
+     ws.on('CB:ib,,offline', (node) => {
++        offlineDone = true;
++        if (offlineBatchTimer) {
++            clearInterval(offlineBatchTimer);
++            offlineBatchTimer = null;
++        }
+         const child = getBinaryNodeChild(node, 'offline');
+         const offlineNotifs = +(child?.attrs.count || 0);
+         logger.info(`handled ${offlineNotifs} offline messages/notifications`);
