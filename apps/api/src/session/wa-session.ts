@@ -110,6 +110,11 @@ export interface WaSessionDeps {
   transcriber?: Transcriber | null;
   /** transcribe solas las notas de voz que lleguen en vivo */
   autoTranscribe?: boolean;
+  /**
+   * números (solo dígitos) a los que el dueño puede escribir aunque no haya conversación
+   * previa, p.ej. el número de un flujo de VentaPlay. Mismos frenos que cualquier envío.
+   */
+  extraRecipients?: ReadonlySet<string>;
 }
 
 /** prefijo de las transcripciones guardadas (cifradas, junto a la bóveda) */
@@ -1607,7 +1612,9 @@ export class WaSession extends EventEmitter<WaSessionEvents> {
       );
     const key = this.stats.canonicalJid(chatJid);
     const v = this.mergedVault().get(key);
-    if (!v?.messages.length)
+    const permitido =
+      key.endsWith('@s.whatsapp.net') && this.deps.extraRecipients?.has(key.split('@')[0]!);
+    if (!v?.messages.length && !permitido)
       throw new HttpError(
         404,
         'chat_not_found',

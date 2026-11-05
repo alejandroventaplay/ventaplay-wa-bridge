@@ -275,6 +275,25 @@ describe('Mi vista', () => {
     expect(nope.statusCode).toBe(404);
   });
 
+  it('escribe a un número sin conversación previa solo si se permitió explícitamente', async () => {
+    const { app, id, manager } = await setup('56912345678', { allowSend: true });
+    const send = (jid: string) =>
+      app.inject({
+        method: 'POST',
+        url: `/sessions/${id}/personal/chats/${encodeURIComponent(jid)}/send`,
+        headers: auth,
+        payload: { text: 'hola flujo' },
+      });
+    expect((await send('56950568251@s.whatsapp.net')).statusCode).toBe(404);
+    manager.allowRecipient('+56 9 5056 8251');
+    const ok = await send('56950568251@s.whatsapp.net');
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json().message).toMatchObject({ fromMe: true, text: 'hola flujo' });
+    // los demás números siguen cerrados
+    expect((await send('56900000002@s.whatsapp.net')).statusCode).toBe(404);
+    expect(() => manager.allowRecipient('123')).toThrow();
+  });
+
   it('crea un grupo con ALLOW_SEND, manda el primer mensaje y aplica el freno', async () => {
     const off = await setup('56912345678');
     const denied = await off.app.inject({

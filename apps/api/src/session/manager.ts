@@ -38,9 +38,22 @@ export interface SessionManagerOptions {
 /** Dueño de todas las sesiones vivas del proceso. */
 export class SessionManager extends EventEmitter<ManagerEvents> {
   private readonly sessions = new Map<string, WaSession>();
+  /** destinatarios permitidos sin conversación previa (los comparten todas las sesiones) */
+  private readonly extraRecipients = new Set<string>();
 
   constructor(private readonly opts: SessionManagerOptions) {
     super();
+  }
+
+  /**
+   * Permite que el dueño escriba a este número aunque no haya conversación previa (p.ej.
+   * el número de un flujo de VentaPlay). Lo usan las extensiones locales; mismos frenos.
+   */
+  allowRecipient(phone: string): void {
+    const digits = phone.replace(/\D/g, '');
+    if (!/^\d{8,15}$/.test(digits)) throw new Error(`Número no válido: ${phone}`);
+    this.extraRecipients.add(digits);
+    this.opts.logger.info({ total: this.extraRecipients.size }, 'destinatario extra permitido');
   }
 
   /** Carga las sesiones guardadas y reconecta las que tenían un teléfono vinculado. */
@@ -235,6 +248,7 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
       exportDir: this.opts.exportDir ?? null,
       transcriber: this.opts.transcriber ?? null,
       autoTranscribe: this.opts.autoTranscribe ?? false,
+      extraRecipients: this.extraRecipients,
     });
     session.on('update', (summary) => this.emit('update', summary));
     this.sessions.set(record.id, session);
