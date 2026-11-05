@@ -20,7 +20,15 @@ import {
 import type { ArchivedMessage, MessageKind, ProjectInfo, SessionSummary } from '@wa-bridge/shared';
 import { api, openFolderCommand, projectMediaBlob } from '../lib/api';
 import { messageActions, projectTools } from '../lib/extensions';
-import { fmtAgo, fmtBytes, fmtDateTime, fmtNumber, fmtPhone } from '../lib/format';
+import {
+  dayKey,
+  fmtAgo,
+  fmtBytes,
+  fmtDateTime,
+  fmtDayKey,
+  fmtNumber,
+  fmtPhone,
+} from '../lib/format';
 import { Spinner } from './ui';
 import { isPdf, pdfFirstPage } from '../lib/pdfPreview';
 import { ProjectMetrics } from './ProjectMetrics';
@@ -54,6 +62,7 @@ export function ProjectView({ session, jid }: { session: SessionSummary; jid: st
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<MessageKind | ''>('');
   const [who, setWho] = useState('');
+  const [day, setDay] = useState('');
   const [open, setOpen] = useState<ArchivedMessage | null>(null);
   const [exporting, setExporting] = useState(false);
   const version = `${session.personal?.messages ?? 0}:${session.updatedAt}`;
@@ -81,11 +90,22 @@ export function ProjectView({ session, jid }: { session: SessionSummary; jid: st
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1], 'es'));
   }, [data]);
 
+  /** días con mensajes, del más nuevo al más antiguo */
+  const days = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const m of data?.messages ?? []) {
+      const k = dayKey(m.timestamp);
+      map.set(k, (map.get(k) ?? 0) + 1);
+    }
+    return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  }, [data]);
+
   const rows = useMemo(() => {
     const q = fold(query.trim());
     return (data?.messages ?? [])
       .filter(
         (m) =>
+          (!day || dayKey(m.timestamp) === day) &&
           (!kind || m.kind === kind) &&
           (!who || personKey(m) === who) &&
           (!q ||
@@ -94,7 +114,7 @@ export function ProjectView({ session, jid }: { session: SessionSummary; jid: st
             fold(personLabel(m)).includes(q)),
       )
       .reverse();
-  }, [data, query, kind, who]);
+  }, [data, query, kind, who, day]);
 
   const [copied, setCopied] = useState(false);
   const [opening, setOpening] = useState(false);
@@ -247,6 +267,19 @@ export function ProjectView({ session, jid }: { session: SessionSummary; jid: st
           </label>
           <select
             className="input w-auto py-2"
+            value={day}
+            onChange={(e) => setDay(e.target.value)}
+            aria-label="Día"
+          >
+            <option value="">Todos los días</option>
+            {days.map(([k, n]) => (
+              <option key={k} value={k}>
+                {fmtDayKey(k)} · {fmtNumber(n)}
+              </option>
+            ))}
+          </select>
+          <select
+            className="input w-auto py-2"
             value={who}
             onChange={(e) => setWho(e.target.value)}
             aria-label="Persona"
@@ -273,7 +306,14 @@ export function ProjectView({ session, jid }: { session: SessionSummary; jid: st
           </select>
         </div>
         {projectTools.map((Tool, i) => (
-          <Tool key={i} sessionId={id} jid={jid} messages={data.messages} />
+          <Tool
+            key={i}
+            sessionId={id}
+            jid={jid}
+            messages={data.messages}
+            visible={rows}
+            day={day || null}
+          />
         ))}
         <p className="border-b border-line bg-canvas px-4 py-2 text-xs text-ink-soft">
           {fmtNumber(rows.length)} de {fmtNumber(data.messages.length)} mensajes · del más nuevo al

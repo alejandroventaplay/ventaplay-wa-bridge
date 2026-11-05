@@ -16,6 +16,10 @@ export interface ProjectToolProps {
   jid: string;
   /** todos los mensajes cargados del proyecto */
   messages: ArchivedMessage[];
+  /** los que quedan con los filtros de la tabla (día, persona, tipo y búsqueda) */
+  visible: ArchivedMessage[];
+  /** día elegido en el filtro (YYYY-MM-DD, hora local) o null si son todos */
+  day: string | null;
 }
 
 interface LocalExtension {

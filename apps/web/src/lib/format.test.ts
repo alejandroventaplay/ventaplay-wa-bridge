@@ -3,6 +3,8 @@ import {
   fmtAgo,
   fmtBytes,
   fmtChatStamp,
+  dayKey,
+  fmtDayKey,
   fmtDayLabel,
   fmtDuration,
   fmtPhone,
@@ -59,5 +61,11 @@ describe('comando para abrir la carpeta', () => {
     expect(openFolderCommand('/Users/a/proy x', 'MacIntel')).toBe('open "/Users/a/proy x"');
     expect(openFolderCommand('C:\\data\\proy', 'Win32')).toBe('explorer "C:\\data\\proy"');
     expect(openFolderCommand('/home/a/"x"', 'Linux x86_64')).toBe('xdg-open "/home/a/\\"x\\""');
+  });
+  it('clave y etiqueta de un día', () => {
+    const ms = new Date(2026, 10, 3, 23, 59).getTime();
+    expect(dayKey(ms)).toBe('2026-11-03');
+    expect(dayKey(new Date(2026, 10, 4, 0, 0).getTime())).toBe('2026-11-04');
+    expect(fmtDayKey('2026-11-03')).toMatch(/^Mar.*3.*nov.*2026$/);
   });
 });

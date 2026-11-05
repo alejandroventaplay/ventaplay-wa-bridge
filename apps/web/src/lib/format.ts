@@ -50,6 +50,26 @@ export function fmtDayLabel(ms: number, now = Date.now()): string {
 
 export const isSameDay = (a: number, b: number) => dayIndex(a) === dayIndex(b);
 
+const pad = (n: number) => String(n).padStart(2, '0');
+const odf = new Intl.DateTimeFormat('es-CL', {
+  weekday: 'short',
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+});
+
+/** día local del mensaje como clave para filtrar: 2026-11-03 */
+export function dayKey(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** etiqueta de una clave de día: Mar, 3 nov 2026 */
+export function fmtDayKey(key: string): string {
+  const [y, m, d] = key.split('-').map(Number);
+  return cap(odf.format(new Date(y!, m! - 1, d!)));
+}
+
 /** 0:07 · 12:30 */
 export function fmtDuration(seconds: number | null | undefined): string {
   if (!seconds || seconds < 0) return '0:00';
