@@ -11,6 +11,7 @@ import { HttpError, type SessionManager } from '../session/manager.js';
 import { isGroupJid, phoneOf, StatsAggregator, type Directory } from '../session/stats.js';
 import type { StoredMessage } from '../session/message-vault.js';
 import { openFolder } from '../dev/open-folder.js';
+import { loadLocalExtensions } from '../dev/local-extensions.js';
 import {
   bridgeZip,
   connectorMcpb,
@@ -765,6 +766,9 @@ export async function buildServer(deps: ServerDeps) {
         return { ok: true };
       });
     }
+
+    // extensiones locales opcionales (privado/api/*.ts, no se versionan; solo en desarrollo)
+    await loadLocalExtensions(api, { config, manager, logger: deps.logger }, root);
   });
 
   return app;
