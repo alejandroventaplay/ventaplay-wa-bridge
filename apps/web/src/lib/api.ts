@@ -90,8 +90,37 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
+/** una API externa en Configuración (la clave nunca llega completa al navegador) */
+export interface Integration {
+  id: string;
+  name: string;
+  description: string;
+  docsUrl: string;
+  placeholder: string;
+  testable: boolean;
+  source: 'config' | 'env' | null;
+  masked: string | null;
+  updatedAt: number | null;
+  warning: string | null;
+}
+
 export const api = {
   health: () => request<Health>('/health'),
+  integrations: () =>
+    request<{ integrations: Integration[] }>('/settings/integrations').then((r) => r.integrations),
+  saveIntegration: (key: string, value: string) =>
+    request<{ integration: Integration }>(`/settings/integrations/${key}`, {
+      method: 'POST',
+      body: JSON.stringify({ value }),
+    }).then((r) => r.integration),
+  removeIntegration: (key: string) =>
+    request<{ integration: Integration }>(`/settings/integrations/${key}`, {
+      method: 'DELETE',
+    }).then((r) => r.integration),
+  testIntegration: (key: string) =>
+    request<{ result: { ok: boolean; message: string } }>(`/settings/integrations/${key}/test`, {
+      method: 'POST',
+    }).then((r) => r.result),
   me: () => request<{ principal: { via: string; email: string | null } }>('/me'),
   list: () => request<{ sessions: SessionSummary[] }>('/sessions').then((r) => r.sessions),
   get: (id: string) =>

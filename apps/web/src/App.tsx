@@ -3,6 +3,7 @@ import { RefreshCw, ServerCrash } from 'lucide-react';
 import { AuthProvider, useAuth } from './hooks/auth';
 import { API_URL } from './lib/api';
 import { FullScreenMessage, Logo, Spinner } from './components/ui';
+import { ConfigPage } from './pages/ConfigPage';
 import { HomePage } from './pages/HomePage';
 import { LoginPage } from './pages/LoginPage';
 import { PrivacyPage } from './pages/PrivacyPage';
@@ -37,6 +38,7 @@ function Gate() {
       <Route path="/" element={<HomePage />} />
       <Route path="/s/:id" element={<SessionPage />} />
       <Route path="/s/:id/filtro" element={<PrivacyPage />} />
+      <Route path="/config" element={<ConfigPage />} />
       <Route
         path="*"
         element={

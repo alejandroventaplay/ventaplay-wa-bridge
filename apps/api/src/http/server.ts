@@ -22,6 +22,7 @@ import {
   skillZip,
 } from '../downloads/packages.js';
 import type { Simulator } from '../wa/simulator.js';
+import type { IntegrationStore } from '../settings/integrations.js';
 import type { Authenticator, Principal } from './auth.js';
 
 declare module 'fastify' {
@@ -43,6 +44,8 @@ export interface ServerDeps {
   repoRoot?: string | null;
   /** para tests: importación a VentaPlay con fetch simulado */
   ventaplay?: VentaPlayService;
+  /** claves de las APIs externas (Configuración); sin esto, las rutas de ajustes dan 404 */
+  integrations?: IntegrationStore;
 }
 
 const IdParams = z.object({ id: z.string().uuid() });
@@ -229,6 +232,45 @@ export async function buildServer(deps: ServerDeps) {
     });
 
     api.get('/me', async (req) => ({ principal: req.principal }));
+
+    // ------------------------------------------- Configuración: APIs externas
+    // Las claves nunca vuelven completas al navegador: solo enmascaradas.
+    const integrations = () => {
+      if (!deps.integrations)
+        throw new HttpError(404, 'no_settings', 'Configuración no disponible en esta API');
+      return deps.integrations;
+    };
+    const IntegrationParams = z.object({ key: z.string().regex(/^[a-z_]{2,40}$/) });
+    const IntegrationBody = z.object({ value: z.string().max(500) });
+
+    api.get('/settings/integrations', async (_req, reply) => {
+      reply.header('cache-control', 'no-store');
+      return { integrations: integrations().list() };
+    });
+
+    api.post('/settings/integrations/:key', async (req) => {
+      const { key } = IntegrationParams.parse(req.params);
+      const { value } = IntegrationBody.parse(req.body ?? {});
+      req.log.info(
+        { integration: key, by: req.principal?.email ?? req.principal?.sub },
+        'clave de integración guardada',
+      );
+      return { integration: await integrations().set(key, value) };
+    });
+
+    api.delete('/settings/integrations/:key', async (req) => {
+      const { key } = IntegrationParams.parse(req.params);
+      req.log.info(
+        { integration: key, by: req.principal?.email ?? req.principal?.sub },
+        'clave de integración borrada',
+      );
+      return { integration: await integrations().remove(key) };
+    });
+
+    api.post('/settings/integrations/:key/test', async (req) => {
+      const { key } = IntegrationParams.parse(req.params);
+      return { result: await integrations().test(key) };
+    });
 
     api.get('/sessions', async () => ({ sessions: manager.list() }));
 
@@ -768,7 +810,11 @@ export async function buildServer(deps: ServerDeps) {
     }
 
     // extensiones locales opcionales (privado/api/*.ts, no se versionan; solo en desarrollo)
-    await loadLocalExtensions(api, { config, manager, logger: deps.logger }, root);
+    await loadLocalExtensions(
+      api,
+      { config, manager, logger: deps.logger, integrations: deps.integrations ?? null },
+      root,
+    );
   });
 
   return app;

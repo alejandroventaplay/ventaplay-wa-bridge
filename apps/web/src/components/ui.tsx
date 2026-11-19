@@ -1,8 +1,9 @@
-import { useEffect, useRef, type ReactNode } from 'react';
-import { Link } from 'react-router';
-import { Bot, LockKeyhole, LogOut, X } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Link, useLocation } from 'react-router';
+import { Bot, KeyRound, LayoutGrid, LockKeyhole, LogOut, Menu, Settings, X } from 'lucide-react';
 import type { SessionStatus, SessionSummary } from '@wa-bridge/shared';
 import { useAuth } from '../hooks/auth';
+import { useSessionsStream } from '../hooks/streams';
 import { initials } from '../lib/format';
 
 export function Logo({ className = '' }: { className?: string }) {
@@ -57,62 +58,270 @@ export function ModeBadge({
   );
 }
 
+/**
+ * Marco de la app: menú lateral fijo (en el celular, cajón con ☰) con los WhatsApp
+ * conectados, las vistas del abierto (`nav`), Configuración y la cuenta.
+ */
 export function AppShell({
   children,
   session,
+  nav,
 }: {
   children: ReactNode;
   /** la sesión abierta: el sello muestra su modo (en el inicio no se muestra) */
-  session?: Pick<SessionSummary, 'assistant'> | null;
+  session?: Pick<SessionSummary, 'id' | 'assistant'> | null;
+  /** submenú de la sesión abierta (Mi vista, General, fijados) */
+  nav?: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const location = useLocation();
+  // al navegar, el cajón del celular se cierra solo (ajuste durante el render, sin efecto)
+  const here = location.pathname + location.search;
+  const [seen, setSeen] = useState(here);
+  if (seen !== here) {
+    setSeen(here);
+    setOpen(false);
+  }
+  return (
+    <div className="min-h-screen lg:pl-72">
+      {/* barra superior solo en celular */}
+      <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-line/80 bg-white/90 px-4 backdrop-blur lg:hidden">
+        <button
+          className="grid size-9 place-items-center rounded-xl text-ink hover:bg-violeta-5"
+          onClick={() => setOpen(true)}
+          aria-label="Abrir menú"
+        >
+          <Menu className="size-5" />
+        </button>
+        <Link to="/" aria-label="Inicio">
+          <Logo />
+        </Link>
+      </header>
+
+      {open && (
+        <div
+          className="fixed inset-0 z-40 bg-ink/30 backdrop-blur-[2px] lg:hidden"
+          onClick={() => setOpen(false)}
+          aria-hidden
+        />
+      )}
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-line bg-white transition-transform duration-200 lg:translate-x-0 ${
+          open ? 'translate-x-0 shadow-2xl' : '-translate-x-full'
+        }`}
+      >
+        <Sidebar activeId={session?.id ?? null} nav={nav} onClose={() => setOpen(false)} />
+      </aside>
+
+      <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:py-8">
+        {session && (
+          <div className="mb-4 flex justify-end md:hidden">
+            <ModeBadge compact session={session} />
+          </div>
+        )}
+        {children}
+      </main>
+    </div>
+  );
+}
+
+function Sidebar({
+  activeId,
+  nav,
+  onClose,
+}: {
+  activeId: string | null;
+  nav?: ReactNode;
+  onClose: () => void;
 }) {
   const { state, logout } = useAuth();
+  const { sessions: all, loaded } = useSessionsStream();
+  // tu WhatsApp (asistente) primero; después los de clientes
+  const sessions = [...all].sort(
+    (a, b) => Number(Boolean(b.assistant)) - Number(Boolean(a.assistant)),
+  );
+  const location = useLocation();
   const email = state.phase === 'signed-in' ? state.email : null;
   const driver = state.phase === 'signed-in' ? state.health.driver : null;
   const authMode = state.phase === 'signed-in' ? state.health.auth : null;
   return (
-    <div className="min-h-screen">
-      <header className="sticky top-0 z-20 border-b border-line/80 bg-white/85 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-6xl items-center gap-3 px-4 sm:px-6">
-          <Link to="/" className="flex items-center gap-3" aria-label="Inicio">
-            <Logo />
-            <span className="hidden rounded-md bg-violeta-5 px-2 py-0.5 text-xs font-bold text-violeta sm:inline">
-              WA Bridge
-            </span>
-          </Link>
-          {driver === 'simulator' && (
-            <span className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-800">
-              Simulador
-            </span>
-          )}
-          <div className="ml-auto flex items-center gap-3">
-            {session && (
-              <span className="hidden md:inline-flex">
-                <ModeBadge compact session={session} />
-              </span>
-            )}
-            {email && (
-              <span
-                className="grid size-8 place-items-center rounded-full bg-violeta text-xs font-bold text-white"
-                title={email}
-              >
-                {initials(email.split('@')[0]?.replace(/[._-]/g, ' '))}
-              </span>
-            )}
-            {authMode !== 'none' && (
-              <button
-                className="btn-secondary px-3 py-2"
-                onClick={() => void logout()}
-                title="Cerrar sesión"
-              >
-                <LogOut className="size-4" aria-hidden />
-                <span className="hidden sm:inline">Salir</span>
-              </button>
-            )}
-          </div>
+    <>
+      <div className="flex h-16 shrink-0 items-center gap-2 px-5">
+        <Link to="/" className="flex items-center gap-2.5" aria-label="Inicio">
+          <Logo />
+          <span className="rounded-md bg-violeta-5 px-2 py-0.5 text-[11px] font-bold whitespace-nowrap text-violeta">
+            WA Bridge
+          </span>
+        </Link>
+        <button
+          className="ml-auto grid size-8 place-items-center rounded-lg text-ink-soft hover:bg-violeta-5 lg:hidden"
+          onClick={onClose}
+          aria-label="Cerrar menú"
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+      {driver === 'simulator' && (
+        <p className="mx-5 mb-2 rounded-md bg-amber-100 px-2 py-1 text-xs font-bold text-amber-800">
+          Modo simulador
+        </p>
+      )}
+
+      <nav className="flex-1 space-y-6 overflow-y-auto px-3 pt-2 pb-6" aria-label="Menú principal">
+        <div>
+          <NavItem
+            to="/"
+            icon={<LayoutGrid className="size-[18px]" />}
+            label="Inicio"
+            active={location.pathname === '/'}
+          />
         </div>
-      </header>
-      <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6">{children}</main>
-    </div>
+
+        <div>
+          <SectionLabel>WhatsApp</SectionLabel>
+          <ul className="space-y-0.5">
+            {sessions.map((s) => {
+              const active = s.id === activeId;
+              const name = s.label ?? s.profile?.name ?? 'Sin nombre';
+              return (
+                <li key={s.id}>
+                  <Link
+                    to={`/s/${s.id}`}
+                    className={`flex items-center gap-3 rounded-xl px-3 py-2 transition ${
+                      active ? 'bg-violeta-5' : 'hover:bg-canvas'
+                    }`}
+                  >
+                    <span className="relative grid size-8 shrink-0 place-items-center rounded-full bg-violeta-10 text-xs font-black text-violeta">
+                      {initials(name)}
+                      <span
+                        className={`absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-white ${STATUS[s.status].dot}`}
+                        title={STATUS[s.status].label}
+                      />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span
+                        className={`block truncate text-sm font-bold ${active ? 'text-violeta' : 'text-ink'}`}
+                      >
+                        {name}
+                      </span>
+                      <span className="block truncate text-xs text-ink-soft">
+                        {s.assistant ? 'Asistente' : s.migration ? 'Migración' : 'Respaldo'}
+                        {' · '}
+                        {STATUS[s.status].label}
+                      </span>
+                    </span>
+                  </Link>
+                  {active && nav && (
+                    <div className="mt-1 mb-2 ml-[22px] border-l border-line pl-3">{nav}</div>
+                  )}
+                </li>
+              );
+            })}
+            {loaded && !sessions.length && (
+              <li className="px-3 py-2 text-sm text-ink-soft">Ninguno conectado todavía</li>
+            )}
+          </ul>
+        </div>
+      </nav>
+
+      <div className="shrink-0 space-y-1 border-t border-line p-3">
+        <NavItem
+          to="/config"
+          icon={<Settings className="size-[18px]" />}
+          label="Configuración"
+          active={location.pathname.startsWith('/config')}
+        />
+        <div className="flex items-center gap-3 rounded-xl px-3 py-2">
+          <span className="grid size-8 shrink-0 place-items-center rounded-full bg-violeta text-xs font-bold text-white">
+            {email ? (
+              initials(email.split('@')[0]?.replace(/[._-]/g, ' '))
+            ) : (
+              <KeyRound className="size-4" />
+            )}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-sm text-ink-soft">
+            {email ?? 'Acceso con token'}
+          </span>
+          {authMode !== 'none' && (
+            <button
+              className="grid size-8 place-items-center rounded-lg text-ink-soft hover:bg-red-50 hover:text-danger"
+              onClick={() => void logout()}
+              title="Cerrar sesión"
+              aria-label="Cerrar sesión"
+            >
+              <LogOut className="size-4" />
+            </button>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function SectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <p className="mb-1.5 px-3 text-[11px] font-black tracking-wider text-ink-soft/80 uppercase">
+      {children}
+    </p>
+  );
+}
+
+/** ítem del menú lateral: link (`to`) o botón (`onClick`) */
+export function NavItem({
+  to,
+  onClick,
+  icon,
+  label,
+  active,
+  badge,
+  small = false,
+}: {
+  to?: string;
+  onClick?: () => void;
+  icon: ReactNode;
+  label: string;
+  active: boolean;
+  badge?: ReactNode;
+  small?: boolean;
+}) {
+  const cls = `flex w-full items-center gap-3 rounded-xl px-3 text-left transition ${
+    small ? 'py-1.5 text-[13px]' : 'py-2 text-sm'
+  } ${
+    active
+      ? 'bg-violeta text-white font-bold shadow-sm'
+      : 'font-semibold text-ink/80 hover:bg-violeta-5 hover:text-violeta'
+  }`;
+  const inner = (
+    <>
+      <span className={`shrink-0 ${active ? 'text-white' : 'text-ink-soft'}`}>{icon}</span>
+      <span className="min-w-0 flex-1 truncate" title={label}>
+        {label}
+      </span>
+      {badge}
+    </>
+  );
+  return to ? (
+    <Link to={to} className={cls} aria-current={active ? 'page' : undefined}>
+      {inner}
+    </Link>
+  ) : (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cls}
+      aria-current={active ? 'page' : undefined}
+    >
+      {inner}
+    </button>
+  );
+}
+
+/** título chico dentro de un submenú (p. ej. "Fijados") */
+export function NavHeading({ children }: { children: ReactNode }) {
+  return (
+    <p className="mt-3 mb-1 flex items-center gap-1.5 px-3 text-[11px] font-black tracking-wider text-ink-soft/80 uppercase">
+      {children}
+    </p>
   );
 }
 

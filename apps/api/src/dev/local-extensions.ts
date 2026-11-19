@@ -5,12 +5,15 @@ import type { FastifyInstance } from 'fastify';
 import type { Logger } from 'pino';
 import type { Config } from '../config.js';
 import type { SessionManager } from '../session/manager.js';
+import type { IntegrationStore } from '../settings/integrations.js';
 
 /** lo que recibe una extensión local de la API */
 export interface LocalApiContext {
   config: Config;
   manager: SessionManager;
   logger: Logger;
+  /** claves de APIs externas cargadas en Configuración (ctx.integrations?.get('openai')) */
+  integrations?: IntegrationStore | null;
 }
 
 /** una extensión local exporta `register` y agrega rutas protegidas (ya pasaron el login) */

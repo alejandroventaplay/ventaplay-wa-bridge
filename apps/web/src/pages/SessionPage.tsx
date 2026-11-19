@@ -1,22 +1,24 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   ArrowLeft,
   Bot,
-  FolderKanban,
   LayoutDashboard,
   MessagesSquare,
+  Pin,
   RefreshCw,
   Trash2,
   TriangleAlert,
   Unplug,
+  UserRound,
+  Users,
   WifiOff,
 } from 'lucide-react';
 import type { ProjectInfo, SessionSummary } from '@wa-bridge/shared';
 import { useAuth } from '../hooks/auth';
 import { useSessionStream } from '../hooks/streams';
 import { api } from '../lib/api';
-import { AppShell, Dialog, Spinner, StatusBadge } from '../components/ui';
+import { AppShell, Dialog, NavHeading, NavItem, Spinner, StatusBadge } from '../components/ui';
 import { Dashboard } from '../components/Dashboard';
 import { LinkView } from '../components/LinkView';
 import { MyView } from '../components/MyView';
@@ -135,7 +137,14 @@ export function SessionPage() {
     (session.profile !== null && ['connecting', 'error', 'logged_out'].includes(session.status));
 
   return (
-    <AppShell session={session}>
+    <AppShell
+      session={session}
+      nav={
+        session.personal ? (
+          <SessionNav tab={tab} onChange={setTab} projects={projects} />
+        ) : undefined
+      }
+    >
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <Link to="/" className="btn-secondary px-3 py-2" aria-label="Volver">
           <ArrowLeft className="size-4" />
@@ -196,7 +205,6 @@ export function SessionPage() {
               onEnable={async (req) => setSession(await api.setAssistant(id, req))}
             />
           )}
-          {session.personal && <Tabs tab={tab} onChange={setTab} projects={projects} />}
           {tab.startsWith('p:') ? (
             <ProjectView key={tab} session={session} jid={tab.slice(2)} />
           ) : tab === 'mia' ? (
@@ -414,7 +422,8 @@ function StatusNotice({
 
 type Tab = 'general' | 'mia' | `p:${string}`;
 
-function Tabs({
+/** submenú lateral de la sesión: Mi vista, General y los chats fijados (📌) */
+function SessionNav({
   tab,
   onChange,
   projects,
@@ -423,29 +432,39 @@ function Tabs({
   onChange: (t: Tab) => void;
   projects: ProjectInfo[];
 }) {
-  const item = (key: Tab, label: string, icon: ReactNode) => (
-    <button
-      key={key}
-      title={label}
-      role="tab"
-      aria-selected={tab === key}
-      onClick={() => onChange(key)}
-      className={`-mb-px inline-flex max-w-[260px] shrink-0 items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-bold transition ${
-        tab === key
-          ? 'border-violeta text-violeta'
-          : 'border-transparent text-ink-soft hover:text-ink'
-      }`}
-    >
-      {icon}
-      <span className="truncate">{label}</span>
-    </button>
-  );
+  const sorted = [...projects].sort((a, b) => (b.last ?? 0) - (a.last ?? 0));
   return (
-    <div role="tablist" className="mb-5 flex gap-1 overflow-x-auto border-b border-line">
-      {item('mia', 'Mi vista', <MessagesSquare className="size-4" />)}
-      {item('general', 'General', <LayoutDashboard className="size-4" />)}
-      {projects.map((p) =>
-        item(`p:${p.jid}`, p.name, <FolderKanban className="size-4 shrink-0 text-turquesa-140" />),
+    <div className="space-y-0.5">
+      <NavItem
+        small
+        onClick={() => onChange('mia')}
+        active={tab === 'mia'}
+        icon={<MessagesSquare className="size-4" />}
+        label="Mi vista"
+      />
+      <NavItem
+        small
+        onClick={() => onChange('general')}
+        active={tab === 'general'}
+        icon={<LayoutDashboard className="size-4" />}
+        label="General"
+      />
+      {sorted.length > 0 && (
+        <>
+          <NavHeading>
+            <Pin className="size-3" /> Fijados · {sorted.length}
+          </NavHeading>
+          {sorted.map((p) => (
+            <NavItem
+              key={p.jid}
+              small
+              onClick={() => onChange(`p:${p.jid}`)}
+              active={tab === `p:${p.jid}`}
+              icon={p.isGroup ? <Users className="size-4" /> : <UserRound className="size-4" />}
+              label={p.name}
+            />
+          ))}
+        </>
       )}
     </div>
   );

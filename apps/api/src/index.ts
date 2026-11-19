@@ -5,6 +5,7 @@ import { loadConfig } from './config.js';
 import { Cipher, resolveDevKey } from './crypto.js';
 import { createAuthenticator } from './http/auth.js';
 import { buildServer } from './http/server.js';
+import { IntegrationStore } from './settings/integrations.js';
 import { SessionManager } from './session/manager.js';
 import { FileSessionStore } from './store/file-store.js';
 import { PgSessionStore } from './store/pg-store.js';
@@ -50,6 +51,10 @@ async function main(): Promise<void> {
     );
   }
   const cipher = new Cipher(keyHex);
+
+  // ---- claves de APIs externas (Configuración en la web, cifradas en DATA_DIR)
+  const integrations = new IntegrationStore(join(config.DATA_DIR, 'integraciones.enc'), cipher);
+  await integrations.init();
 
   // ---- almacenamiento
   const store: SessionStore =
@@ -113,6 +118,7 @@ async function main(): Promise<void> {
     logger,
     storageKind: store.kind,
     simulator,
+    integrations,
   });
   await manager.init();
   await app.listen({ host: config.HOST, port: config.PORT });
